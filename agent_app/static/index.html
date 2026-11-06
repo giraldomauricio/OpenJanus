@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpenJanus</title>
+<link rel="icon" type="image/png" href="/logo.png">
 <script>document.documentElement.dataset.theme = localStorage.theme || "dark";</script>
 <style>
   /* Themes are just variable sets. "dark" (default) is :root; the others override it via <html data-theme="...">. */
@@ -11,14 +12,14 @@
           --ok:#4ade80; --bad:#f87171; --warn:#fbbf24;
           --code-bg:var(--code-bg); --user-bg:var(--user-bg); --on-accent:#0b1020; --on-warn:#000; --radius:10px; --radius-sm:6px; --pill:99px;
           --font:-apple-system, system-ui, sans-serif; --mono:ui-monospace, SFMono-Regular, Menlo, monospace;
-          --glow:none; --card-shadow:none; color-scheme:dark; }
+          --glow:none; --card-shadow:none; --logo-filter:invert(1); color-scheme:dark; }
   :root[data-theme="light"] { --bg:#fbf8f3; --panel:#f1ece4; --line:#ded5c8; --text:#4a4458; --muted:#746c82; --accent:#8e9bef;
           --ok:#5fae8a; --bad:#d9778b; --warn:#d9a35f; --code-bg:#ece6f4; --user-bg:#dfe6fb; --on-accent:#2b2740; --on-warn:#2b2740;
-          --card-shadow:0 1px 3px rgba(120,100,140,.12); color-scheme:light; }
+          --card-shadow:0 1px 3px rgba(120,100,140,.12); --logo-filter:none; color-scheme:light; }
   :root[data-theme="hacker"] { --bg:#000800; --panel:#03120a; --line:#0f4a1f; --text:#33ff66; --muted:#1f9e45; --accent:#00ff9c;
           --ok:#33ff66; --bad:#ff4d4d; --warn:#ffd23f; --code-bg:#001a08; --user-bg:#06240f; --on-accent:#001a08; --on-warn:#001a08;
           --radius:0; --radius-sm:0; --pill:0; --font:ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-          --glow:0 0 6px rgba(51,255,102,.45); color-scheme:dark; }
+          --glow:0 0 6px rgba(51,255,102,.45); --logo-filter:invert(1) sepia(1) saturate(7) hue-rotate(75deg) drop-shadow(0 0 4px rgba(51,255,102,.6)); color-scheme:dark; }
   * { box-sizing: border-box; }
   body { margin:0; height:100vh; display:flex; flex-direction:column; background:var(--bg); color:var(--text);
          font:14px/1.5 var(--font); }
@@ -100,6 +101,12 @@
   [data-theme="hacker"] .working .dots { display:none; }
   [data-theme="hacker"] .working .cursor { display:inline-block; width:9px; height:1em; background:var(--accent); animation:blink 1s steps(1) infinite; }
   .working .cursor { display:none; }
+  .logo { filter:var(--logo-filter); display:block; }
+  header .logo { height:30px; width:auto; margin-right:-2px; }
+  #welcome { margin:auto; text-align:center; max-width:440px; padding:20px; color:var(--muted); }
+  #welcome .logo { height:110px; width:auto; margin:0 auto 14px; }
+  #welcome h2 { margin:0 0 4px; color:var(--text); font-size:20px; } #welcome p { margin:4px 0 14px; }
+  #welcome .chips { display:flex; flex-direction:column; gap:8px; } #welcome .chips button { text-align:left; color:var(--text); }
   body { text-shadow:var(--glow); }
   /* hacker: terminal look. Prompts replace bubbles; a faint scanline layer sits over everything but ignores the mouse. */
   [data-theme="hacker"] body::after { content:""; position:fixed; inset:0; pointer-events:none; z-index:9;
@@ -123,6 +130,7 @@
 </head>
 <body>
 <header>
+  <img class="logo" src="/logo.png" alt="" width="30" height="30">
   <h1>OpenJanus</h1>
   <select id="provider"></select>
   <input id="model" list="models" placeholder="model" size="22">
@@ -258,7 +266,7 @@ function setModel() {
 async function newChat() {
   if (busy) return;
   sessionId = (await (await api("/api/sessions", { method: "POST" })).json()).id;
-  $("#log").replaceChildren(); await refreshHistory();
+  $("#log").replaceChildren(); showWelcome(); await refreshHistory();
 }
 $("#new").onclick = newChat;
 async function openChat(id) {
@@ -296,7 +304,19 @@ $("#file").onchange = async () => {
   } catch (e) { alert("Import failed: " + e.message); }
 };
 
+function showWelcome() {
+  const w = el("div"); w.id = "welcome";
+  const img = el("img", "logo"); img.src = "/logo.png"; img.alt = "OpenJanus";
+  w.append(img, el("h2", "", "OpenJanus"), el("p", "", "Work with your local database, and let the agent propose its own tools and skills."));
+  const chips = el("div", "chips");
+  for (const t of ["What can you do? List your tools and skills.", "What tables are in my database?",
+                   "Review your tools and skills for overlap, then review my database."]) {
+    const b = el("button", "", t); b.type = "button"; b.onclick = () => prefill(t); chips.append(b);
+  }
+  w.append(chips); $("#log").append(w);
+}
 function add(node) {
+  $("#welcome")?.remove();
   const log = $("#log"), w = $("#working");
   w ? log.insertBefore(node, w) : log.append(node);  // the working indicator stays last
   log.scrollTop = log.scrollHeight; return node;

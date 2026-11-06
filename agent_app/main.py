@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from . import config
@@ -52,6 +52,12 @@ def require_token(x_agent_token: str = Header(default="")) -> None:
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     return INDEX.replace("__TOKEN__", TOKEN)
+
+
+@app.get("/logo.png", include_in_schema=False)
+def logo() -> FileResponse:
+    return FileResponse(Path(__file__).parent / "static" / "logo.png", media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.get("/api/config")

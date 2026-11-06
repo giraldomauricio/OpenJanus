@@ -51,7 +51,7 @@ the schema; it reports and you decide. Overlap detection is lexical (name/descri
 "Never used" only counts chats saved since history was added.
 
 **Themes.** The header's theme menu switches between *Dark* (default), *Pastel light* and *Hacker* (terminal look). Themes are CSS
-variable sets at the top of `agent_app/static/index.html` (`:root[data-theme="..."]`), saved in the browser's localStorage; add a
+variable sets at the top of `agent_app/static/index.html` (`:root[data-theme="..."]`), saved in the browser's localStorage; the logo is `agent_app/static/logo.png` (recoloured per theme with a CSS filter); add a
 new one by defining another variable block and an `<option>`.
 
 ## Security notes (read before approving tools)

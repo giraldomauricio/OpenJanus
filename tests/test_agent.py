@@ -351,3 +351,10 @@ def test_tool_usage_counts(tmp_path):
                                 {"type": "tool_call", "name": "a", "id": "2", "args": {}}]
     store.save(s)
     assert store.tool_usage() == {"a": 2}
+
+
+def test_logo_is_served():
+    from fastapi.testclient import TestClient
+    from agent_app import main
+    r = TestClient(main.app).get("/logo.png")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png" and r.content[:4] == b"\x89PNG"
