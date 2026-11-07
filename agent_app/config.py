@@ -1,11 +1,22 @@
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
-
-load_dotenv()
+from dotenv import dotenv_values, load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def load_env(path: Path) -> None:
+    """Load `.env`. A variable already set in the shell wins, EXCEPT when the shell exports it empty
+    (e.g. `export ANTHROPIC_API_KEY=`), which python-dotenv would otherwise treat as 'already set' and ignore the file."""
+    load_dotenv(path)
+    for key, value in dotenv_values(path).items():
+        if value and not os.environ.get(key):
+            os.environ[key] = value
+
+
+load_env(ROOT / ".env")
+
 DATA_DIR = Path(os.getenv("AGENT_DATA_DIR", ROOT / "data"))
 DB_PATH = DATA_DIR / "agent.db"
 EXT_DIR = DATA_DIR / "extensions"
@@ -17,6 +28,10 @@ DEFAULT_MODELS = {
     "gemini": os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
     "ollama": os.getenv("OLLAMA_MODEL", "qwen3:8b"),
 }
+# The generic ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN variables are deliberately NOT used: shells often set them to point
+# Claude Code at another backend (e.g. Ollama), which would silently redirect this app's "Claude" option. Use the
+# OPENJANUS_-prefixed variable if you really want a gateway/proxy.
+ANTHROPIC_BASE_URL = os.getenv("OPENJANUS_ANTHROPIC_BASE_URL") or "https://api.anthropic.com"
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
 

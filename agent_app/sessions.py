@@ -45,7 +45,7 @@ class SessionStore:
         if path is None:
             return
         s.updated = time.time()
-        data = {"id": s.id, "title": s.title, "created": s.created, "updated": s.updated,
+        data = {"id": s.id, "title": s.title, "provider": s.provider, "model": s.model, "created": s.created, "updated": s.updated,
                 "events": s.events, "messages": [_encode_message(m) for m in s.messages]}
         fd, tmp = tempfile.mkstemp(dir=self.dir, suffix=".tmp")
         with os.fdopen(fd, "w") as f:
@@ -58,7 +58,7 @@ class SessionStore:
             return None
         try:
             d = json.loads(path.read_text())
-            return Session(id=d["id"], title=d.get("title", ""), created=d.get("created", 0), updated=d.get("updated", 0),
+            return Session(id=d["id"], title=d.get("title", ""), provider=d.get("provider", ""), model=d.get("model", ""), created=d.get("created", 0), updated=d.get("updated", 0),
                            events=d.get("events", []), messages=[_decode_message(m) for m in d["messages"]])
         except (ValueError, KeyError, TypeError):
             return None
@@ -68,7 +68,8 @@ class SessionStore:
         for p in self.dir.glob("*.json"):
             try:
                 d = json.loads(p.read_text())
-                out.append({"id": d["id"], "title": d.get("title") or "Untitled", "updated": d.get("updated", 0)})
+                out.append({"id": d["id"], "title": d.get("title") or "Untitled", "updated": d.get("updated", 0),
+                            "provider": d.get("provider", ""), "model": d.get("model", "")})
             except (ValueError, KeyError):
                 continue
         return sorted(out, key=lambda x: x["updated"], reverse=True)

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import os
 import uuid
-from typing import Any
+from typing import Any, Iterator
 
-from .base import LLMProvider, ToolCall, ToolDef, Turn
+from .base import LLMProvider, ToolCall, ToolDef, Turn, collect
 
 
 class GeminiProvider(LLMProvider):
@@ -41,6 +41,9 @@ class GeminiProvider(LLMProvider):
         return out
 
     def generate(self, system: str, messages: list[dict[str, Any]], tools: list[ToolDef]) -> Turn:
+        return collect(self.stream(system, messages, tools))
+
+    def _stream(self, system: str, messages: list[dict[str, Any]], tools: list[ToolDef]) -> Iterator[str | Turn]:
         t = self.types
         config = t.GenerateContentConfig(
             system_instruction=system,
@@ -50,16 +53,18 @@ class GeminiProvider(LLMProvider):
             ])],
             automatic_function_calling=t.AutomaticFunctionCallingConfig(disable=True),
         )
-        resp = self.client.models.generate_content(model=self.model, contents=self._convert(messages), config=config)
-        turn = Turn()
-        if not resp.candidates or not resp.candidates[0].content:
-            return turn
-        content = resp.candidates[0].content
-        turn.raw = content
-        for p in content.parts or []:
-            if p.function_call:
-                fc = p.function_call
-                turn.tool_calls.append(ToolCall(fc.id or uuid.uuid4().hex[:12], fc.name, dict(fc.args or {})))
-            elif p.text and not getattr(p, "thought", False):
-                turn.text += p.text
-        return turn
+        turn, parts = Turn(), []
+        for chunk in self.client.models.generate_content_stream(model=self.model, contents=self._convert(messages), config=config):
+            if not chunk.candidates or not chunk.candidates[0].content:
+                continue
+            for p in chunk.candidates[0].content.parts or []:
+                parts.append(p)  # kept in order so thought signatures survive in turn.raw
+                if p.function_call:
+                    fc = p.function_call
+                    turn.tool_calls.append(ToolCall(fc.id or uuid.uuid4().hex[:12], fc.name, dict(fc.args or {})))
+                elif p.text and not getattr(p, "thought", False):
+                    turn.text += p.text
+                    yield p.text
+        if parts:
+            turn.raw = t.Content(role="model", parts=parts)
+        yield turn

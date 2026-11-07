@@ -89,6 +89,35 @@ class Database(IntrospectionMixin):
             cols = [d[0] for d in cur.description or []]
             return {"columns": cols, "rows": [dict(r) for r in rows[:limit]], "truncated": truncated}
 
+    def export_csv(self, table: str, chunk: int = 500) -> Iterator[str]:
+        """The whole table as CSV text, streamed in chunks (UTF-8 BOM for Excel; formula-looking text is neutralised)."""
+        import csv
+        import io
+        import re
+
+        num = re.compile(r"^-?\d+(\.\d+)?([eE][+-]?\d+)?$")
+
+        def cell(v: Any) -> Any:
+            if v is None:
+                return ""
+            if isinstance(v, bytes):
+                return f"<blob {len(v)} bytes>"
+            if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r") and not num.match(v.strip()):
+                return "'" + v
+            return v
+
+        buf = io.StringIO()
+        writer = csv.writer(buf, lineterminator="\r\n")
+        with self._ro() as conn:
+            cur = conn.execute(f"SELECT * FROM {quote(table)}")
+            writer.writerow([cell(d[0]) for d in cur.description])
+            yield "\ufeff" + buf.getvalue()
+            while rows := cur.fetchmany(chunk):
+                buf.seek(0)
+                buf.truncate()
+                writer.writerows([[cell(v) for v in r] for r in rows])
+                yield buf.getvalue()
+
     def table_names(self) -> list[str]:
         r = self.query(
             f"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' "

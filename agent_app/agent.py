@@ -18,10 +18,13 @@ from .extensions import ExtensionManager
 from .extensions.lint import lint_tool_source
 from .http_safe import SafeHttp
 from .introspection import build_catalog
-from .llm import LLMProvider, ToolDef
+from .tables import as_table
+from .llm import LLMProvider, ToolDef, Turn
 from .sdk import BUILTIN_TOOLS, AgentContext, Tool, ToolContext
 from .skills import SkillStore
 from . import tools as _builtin  # noqa: F401  (registers built-in tools)
+
+STOPPED = "[Stopped by the user.]"
 
 SYSTEM_PROMPT = """You are a data assistant working with a local SQLite database through tools.
 
@@ -49,8 +52,11 @@ class Session:
     messages: list[dict[str, Any]] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
     title: str = ""
+    provider: str = ""  # last provider/model used in this chat (each user event also records its own)
+    model: str = ""
     created: float = field(default_factory=time.time)
     updated: float = 0.0
+    cancel: threading.Event = field(default_factory=threading.Event)  # set by the Stop button
     events: list[dict[str, Any]] = field(default_factory=list)  # what the UI displays, replayed when a chat is reopened
 
 
@@ -105,10 +111,15 @@ class Agent:
         return SYSTEM_PROMPT.format(skills="\n".join(lines))
 
     def _execute(self, tools: dict[str, Tool], name: str, args: dict[str, Any]) -> tuple[bool, str]:
+        return self._run(tools, name, args)[:2]
+
+    def _run(self, tools: dict[str, Tool], name: str, args: dict[str, Any]) -> tuple[bool, str, Any]:
+        """(ok, text for the model, raw result). The raw result lets the UI offer CSV/charts without re-parsing truncated text."""
         t = tools.get(name)
         if t is None:
-            return False, f"Unknown tool '{name}'. Available: {sorted(tools)}"
+            return False, f"Unknown tool '{name}'. Available: {sorted(tools)}", None
         ctx = self.agent_ctx if t.origin == "builtin" else self.tool_ctx
+        result = None
         try:
             result = t.call(args, ctx)
             text = json.dumps(result, default=str, ensure_ascii=False)
@@ -119,9 +130,20 @@ class Agent:
             ok, text = False, f"{type(e).__name__}: {e}"
         if len(text) > config.MAX_TOOL_RESULT_CHARS:
             text = text[: config.MAX_TOOL_RESULT_CHARS] + f'... [truncated, {len(text)} chars total]'
-        return ok, text
+        return ok, text, result if ok else None
+
+    @staticmethod
+    def _stopped(session: Session, partial: str = "") -> Iterator[dict[str, Any]]:
+        """Close the turn cleanly after a Stop so the stored conversation stays valid for every provider."""
+        partial = partial.rstrip()
+        session.messages.append({"role": "assistant", "tool_calls": [], "raw": None,
+                                 "text": (partial + "\n\n" if partial else "") + STOPPED})
+        if partial:
+            yield {"type": "text", "text": partial}
+        yield {"type": "cancelled"}
 
     def run(self, session: Session, user_text: str, provider: LLMProvider) -> Iterator[dict[str, Any]]:
+        session.cancel.clear()
         session.messages.append({"role": "user", "content": user_text})
         tools, problems = self.build_tools()
         for p in problems:
@@ -129,10 +151,29 @@ class Agent:
         defs = [ToolDef(t.name, t.description, t.schema()) for t in tools.values()]
         system = self.system_prompt()
         for _ in range(config.MAX_STEPS):
+            if session.cancel.is_set():
+                yield from self._stopped(session)
+                return
+            turn, partial, stream = None, "", provider.stream(system, session.messages, defs)
             try:
-                turn = provider.generate(system, session.messages, defs)
+                for part in stream:
+                    if isinstance(part, Turn):
+                        turn = part
+                    elif part:
+                        partial += part
+                        yield {"type": "text_delta", "text": part}  # live preview only; the "text" event below is authoritative
+                    if session.cancel.is_set():
+                        break
+                if turn is None and not session.cancel.is_set():
+                    raise RuntimeError("The model returned nothing")
             except Exception as e:
-                yield {"type": "error", "text": f"{provider.name}: {e}"}
+                if not session.cancel.is_set():  # a Stop closes the connection on purpose, which surfaces as an error here
+                    yield {"type": "error", "text": f"{provider.name}: {e}"}
+                    return
+            finally:
+                stream.close()
+            if session.cancel.is_set():
+                yield from self._stopped(session, turn.text if turn else partial)
                 return
             session.messages.append({"role": "assistant", "text": turn.text, "tool_calls": turn.tool_calls,
                                      "raw": turn.raw})
@@ -143,9 +184,16 @@ class Agent:
                 return
             results = []
             for c in turn.tool_calls:
+                if session.cancel.is_set():  # every tool call needs a result, even the ones that never ran
+                    results.append({"id": c.id, "name": c.name, "content": "Not run: the user pressed Stop.", "is_error": True})
+                    continue
                 yield {"type": "tool_call", "id": c.id, "name": c.name, "args": c.args}
-                ok, content = self._execute(tools, c.name, c.args)
+                ok, content, raw = self._run(tools, c.name, c.args)
                 results.append({"id": c.id, "name": c.name, "content": content, "is_error": not ok})
-                yield {"type": "tool_result", "id": c.id, "name": c.name, "ok": ok, "content": content}
+                ev = {"type": "tool_result", "id": c.id, "name": c.name, "ok": ok, "content": content}
+                table = as_table(raw)  # UI-only: lets the chat offer a preview, CSV download and chart
+                if table:
+                    ev["table"] = table
+                yield ev
             session.messages.append({"role": "tool", "results": results})
         yield {"type": "error", "text": f"Stopped after {config.MAX_STEPS} steps without a final answer."}

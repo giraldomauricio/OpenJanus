@@ -50,6 +50,15 @@ orphaned references, missing keys, near-duplicate tables, empty/all-NULL/constan
 the schema; it reports and you decide. Overlap detection is lexical (name/description similarity), so treat it as a pointer.
 "Never used" only counts chats saved since history was added.
 
+**Query results.** When a tool returns a table (`{columns, rows}`, e.g. `query`) with 2+ rows, the chat shows a preview with
+**Download CSV** and, only when it makes sense, **Chart**. The CSV is built in the browser from the rows the tool returned (up to 1000;
+a notice appears if the query hit its limit) and neutralises spreadsheet formulas (`=`, `+`, `-`, `@`). A chart is offered when there
+is one point per row and a numeric column: dates -> line, labels (<= 50, unique) -> bar, two numeric columns -> scatter. Lists of
+names, ids, single values and free text get no chart. Charts are dependency-free SVG (`renderChart` in `index.html`).
+
+**Exports.** Query results offer a CSV of the rows returned; each table in the *Database* tab has *Download CSV* for the whole
+table (streamed, UTF-8 with BOM, formula-looking text neutralised).
+
 **Themes.** The header's theme menu switches between *Dark* (default), *Pastel light* and *Hacker* (terminal look). Themes are CSS
 variable sets at the top of `agent_app/static/index.html` (`:root[data-theme="..."]`), saved in the browser's localStorage; the logo is `agent_app/static/logo.png` (recoloured per theme with a CSS filter); add a
 new one by defining another variable block and an `<option>`.
@@ -67,6 +76,10 @@ new one by defining another variable block and an `<option>`.
 - `references` on adopted tables are logical metadata (SQLite cannot add foreign keys to an existing table); on tables made by
   `define_model` they are real, enforced foreign keys.
 - `find_relationships` scans every table pair and is capped at 2000 comparisons, so it is meant for small/medium local databases.
-- Chats are saved after each reply and restored on restart (the header *History* menu; the newest opens on load). Gemini's
-  thought signatures aren't persisted, so a resumed Gemini chat is rebuilt from text and tool calls. There is no delete button yet
-  (`DELETE /api/sessions/{id}` exists). Small local models may need several tries to write a valid tool; lint errors are fed back to them.
+- Chats are saved after each reply and restored on restart (the header *History* menu; the newest opens on load). Each saved chat
+  remembers its last provider/model (restored when you reopen it) and every message is captioned with the model that answered.
+  The 🗑 button deletes the current chat. Gemini's thought signatures are kept within a run but not saved, so a resumed Gemini chat
+  is rebuilt from text and tool calls.
+- Replies stream token by token (`stream()` in each provider; providers that only implement `generate()` fall back to one chunk).
+  Only the final text is saved. Claude and Gemini streaming is covered by tests with faked clients, not by live API calls.
+- Small local models may need several tries to write a valid tool; lint errors are fed back to them.

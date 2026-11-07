@@ -358,3 +358,396 @@ def test_logo_is_served():
     from agent_app import main
     r = TestClient(main.app).get("/logo.png")
     assert r.status_code == 200 and r.headers["content-type"] == "image/png" and r.content[:4] == b"\x89PNG"
+
+
+def test_query_result_carries_table_for_ui(env):
+    db, ext, skills, agent = env
+    db.define_model(ModelSpec(**SPEC))
+    db.insert("thing", [{"label": "a", "qty": 1}, {"label": "b", "qty": 2}])
+    ev = events(agent, "q", Scripted([
+        Turn(tool_calls=[ToolCall("1", "query", {"sql": "SELECT label, qty FROM thing ORDER BY label"}),
+                         ToolCall("2", "list_tables", {})]), Turn(text="ok")]))
+    res = {e["id"]: e for e in ev if e["type"] == "tool_result"}
+    assert res["1"]["table"] == {"columns": ["label", "qty"], "rows": [["a", 1], ["b", 2]], "truncated": False}
+    assert "table" not in res["2"]  # a list of dicts without columns/rows is not treated as a table
+    from agent_app.tables import as_table
+    assert as_table({"columns": ["a"], "rows": []}) is None and as_table("x") is None
+
+
+def test_stale_token_is_rejected_and_page_not_cached():
+    from fastapi.testclient import TestClient
+    from agent_app import main
+    c = TestClient(main.app)
+    r = c.post("/api/sessions", headers={"X-Agent-Token": "token-from-a-previous-server-run"})
+    assert r.status_code == 403 and "token" in r.json()["detail"].lower()
+    page = c.get("/")
+    assert page.headers["cache-control"] == "no-store" and main.TOKEN in page.text
+
+
+# ---- streaming ------------------------------------------------------------------------------------------------
+
+class Streamer(LLMProvider):
+    name = "fake"
+
+    def __init__(self, chunks, tool_calls=()):
+        super().__init__("m")
+        self.chunks, self.tool_calls = chunks, list(tool_calls)
+
+    def generate(self, *a):
+        raise AssertionError("agent must use stream()")
+
+    def stream(self, system, messages, tools):
+        yield from self.chunks
+        yield Turn(text="".join(self.chunks), tool_calls=self.tool_calls)
+
+
+def test_agent_forwards_deltas_then_authoritative_text(env):
+    *_, agent = env
+    ev = events(agent, "hi", Streamer(["Hel", "lo ", "there"]))
+    assert [e["text"] for e in ev if e["type"] == "text_delta"] == ["Hel", "lo ", "there"]
+    assert [e["text"] for e in ev if e["type"] == "text"] == ["Hello there"]
+    assert [e["type"] for e in ev].index("text") > [e["type"] for e in ev].index("text_delta")
+
+
+def test_default_stream_wraps_generate(env):
+    *_, agent = env
+    ev = events(agent, "hi", Scripted([Turn(text="whole answer")]))  # Scripted only implements generate()
+    assert [e["type"] for e in ev] == ["text_delta", "text", "done"]
+
+
+def test_stream_error_mid_reply_is_reported(env):
+    *_, agent = env
+
+    class Boom(Streamer):
+        def stream(self, *a):
+            yield "partial"
+            raise RuntimeError("connection reset")
+
+    ev = events(agent, "hi", Boom([]))
+    assert ev[-1]["type"] == "error" and "connection reset" in ev[-1]["text"]
+
+
+def _mock_ollama(monkeypatch, handler):
+    """Make the provider's httpx.Client talk to `handler` instead of a real Ollama."""
+    import httpx
+    real = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+
+
+def test_ollama_stream_parses_ndjson_and_hides_think(monkeypatch):
+    import json as _json
+    import httpx
+    from agent_app.llm.ollama_provider import OllamaProvider
+    lines = [{"message": {"content": "<think>plan"}}, {"message": {"content": "ning</think>Hi "}},
+             {"message": {"content": "there"}},
+             {"message": {"content": "", "tool_calls": [{"function": {"name": "list_tables", "arguments": {}}}]}, "done": True}]
+
+    def handler(req):
+        assert _json.loads(req.content)["stream"] is True
+        return httpx.Response(200, content="\n".join(_json.dumps(x) for x in lines).encode())
+
+    _mock_ollama(monkeypatch, handler)
+    parts = list(OllamaProvider("m").stream("sys", [{"role": "user", "content": "x"}], []))
+    assert "".join(p for p in parts if isinstance(p, str)) == "Hi there"
+    turn = parts[-1]
+    assert turn.text == "Hi there" and [c.name for c in turn.tool_calls] == ["list_tables"]
+
+
+def test_ollama_stream_error_status(monkeypatch):
+    import httpx
+    from agent_app.llm.ollama_provider import OllamaProvider
+    _mock_ollama(monkeypatch, lambda req: httpx.Response(404, text="model not found"))
+    with pytest.raises(RuntimeError, match="404.*model not found"):
+        list(OllamaProvider("m").stream("s", [], []))
+
+
+def test_anthropic_stream(monkeypatch):
+    from types import SimpleNamespace as NS
+    from agent_app.llm.anthropic_provider import AnthropicProvider
+    p = AnthropicProvider.__new__(AnthropicProvider)
+    p.model = "m"
+    final = NS(content=[NS(type="text", text="Hi there"), NS(type="tool_use", id="t1", name="query", input={"sql": "select 1"})])
+
+    class Ctx:
+        text_stream = iter(["Hi ", "there"])
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get_final_message(self): return final
+
+    p.client = NS(messages=NS(stream=lambda **kw: Ctx()))
+    parts = list(p.stream("sys", [{"role": "user", "content": "x"}], []))
+    assert parts[:2] == ["Hi ", "there"] and parts[-1].text == "Hi there"
+    assert parts[-1].tool_calls == [ToolCall("t1", "query", {"sql": "select 1"})]
+
+
+def test_gemini_stream_keeps_parts_for_signatures():
+    from types import SimpleNamespace as NS
+    from google.genai import types as gt
+    from agent_app.llm.gemini_provider import GeminiProvider
+    p = GeminiProvider.__new__(GeminiProvider)
+    p.model, p.types = "m", gt
+    chunk = lambda *parts: NS(candidates=[NS(content=gt.Content(role="model", parts=list(parts)))])
+    chunks = [chunk(gt.Part(text="Hel")), chunk(gt.Part(text="lo")),
+              chunk(gt.Part(function_call=gt.FunctionCall(name="list_tables", args={})))]
+    p.client = NS(models=NS(generate_content_stream=lambda **kw: iter(chunks)))
+    parts = list(p.stream("sys", [{"role": "user", "content": "x"}], []))
+    assert parts[:2] == ["Hel", "lo"] and parts[-1].text == "Hello" and parts[-1].tool_calls[0].name == "list_tables"
+    assert isinstance(parts[-1].raw, gt.Content) and len(parts[-1].raw.parts) == 3
+
+
+# ---- chat metadata + exports ----------------------------------------------------------------------------------
+
+def test_session_records_provider_model_and_deltas_not_persisted(tmp_path, monkeypatch):
+    import re
+    from fastapi.testclient import TestClient
+    from agent_app import main
+    from agent_app.sessions import SessionStore
+    monkeypatch.setattr(main, "store", SessionStore(tmp_path))
+    monkeypatch.setattr(main, "make_provider", lambda name, model=None: Streamer(["a", "b"]))
+    c = TestClient(main.app)
+    tok = {"X-Agent-Token": main.TOKEN}
+    sid = c.post("/api/sessions", headers=tok).json()["id"]
+    body = c.post("/api/chat", headers=tok, json={"session_id": sid, "message": "hi", "provider": "ollama", "model": "qwen3:8b"}).text
+    assert body.count('"text_delta"') == 2
+    saved = c.get(f"/api/sessions/{sid}").json()
+    assert (saved["provider"], saved["model"]) == ("ollama", "m")
+    assert [e["type"] for e in saved["events"]] == ["user", "text"]
+    assert saved["events"][0]["provider"] == "ollama"
+    assert c.get("/api/sessions").json()[0]["provider"] == "ollama"
+    assert c.delete(f"/api/sessions/{sid}", headers=tok).json() == {"deleted": True}
+
+
+def test_table_csv_export(env):
+    db, *_ = env
+    db.define_model(ModelSpec(**SPEC))
+    db.insert("thing", [{"label": "=cmd()", "qty": -3}, {"label": 'a,"b"', "qty": 2}, {"label": "é\nx"}])
+    text = "".join(db.export_csv("thing", chunk=2))
+    assert text.startswith("﻿id,label,qty\r\n")
+    assert "'=cmd(),-3" in text and '"a,""b"""' in text and '"é\nx"' in text
+    from fastapi.testclient import TestClient
+    from agent_app import main
+    r = TestClient(main.app).get("/api/db/does_not_exist/csv")
+    assert r.status_code == 404
+
+
+def test_dotenv_fills_empty_but_respects_nonempty_shell_vars(tmp_path, monkeypatch):
+    from agent_app.config import load_env
+    f = tmp_path / ".env"
+    f.write_text("A_EMPTY_IN_SHELL=from-file\nB_SET_IN_SHELL=from-file\nC_UNSET=from-file\nD_BLANK_IN_FILE=\n")
+    monkeypatch.setenv("A_EMPTY_IN_SHELL", "")
+    monkeypatch.setenv("B_SET_IN_SHELL", "from-shell")
+    for k in ("C_UNSET", "D_BLANK_IN_FILE"):
+        monkeypatch.delenv(k, raising=False)
+    load_env(f)
+    import os
+    assert os.environ["A_EMPTY_IN_SHELL"] == "from-file"      # the bug: empty shell export hid the file's value
+    assert os.environ["B_SET_IN_SHELL"] == "from-shell"       # a deliberate shell value still wins
+    assert os.environ["C_UNSET"] == "from-file" and os.environ["D_BLANK_IN_FILE"] == ""
+    monkeypatch.undo()
+
+
+def test_claude_provider_ignores_shell_redirect_to_other_backend(monkeypatch):
+    from agent_app.llm.anthropic_provider import AnthropicProvider
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://localhost:11434")   # e.g. Claude Code pointed at Ollama
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "ollama")
+    c = AnthropicProvider("claude-sonnet-5-5").client
+    assert str(c.base_url).startswith("https://api.anthropic.com") and c.api_key == "sk-ant-test" and not c.auth_token
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY is not set"):
+        AnthropicProvider("m")
+
+
+# ---- DNS rebinding ---------------------------------------------------------------------------------------------
+
+def _fake_dns(monkeypatch, answers):
+    """answers: list of lists of IPs; each getaddrinfo call pops the next answer (simulates a rebinding DNS server)."""
+    import socket
+    calls = []
+
+    def gai(host, port, *a, **kw):
+        calls.append(host)
+        ips = answers.pop(0) if len(answers) > 1 else answers[0]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port)) for ip in ips]
+
+    monkeypatch.setattr(socket, "getaddrinfo", gai)
+    return calls
+
+
+def test_http_connects_only_to_the_ip_that_was_checked(monkeypatch):
+    import httpx
+    from agent_app.http_safe import SafeHttp
+    calls = _fake_dns(monkeypatch, [["93.184.216.34"], ["127.0.0.1"]])  # 1st answer public, any later one would be loopback
+    seen = []
+
+    def handler(req):
+        seen.append((req.url.host, req.headers["host"], req.extensions.get("sni_hostname")))
+        return httpx.Response(200, text="ok")
+
+    http = SafeHttp()
+    http.transport = httpx.MockTransport(handler)
+    assert http.get("https://example.com/path", params={"a": "1"}).text == "ok"
+    assert seen == [("93.184.216.34", "example.com", "example.com")]   # pinned IP, original Host + SNI
+    assert calls == ["example.com"]                                     # resolved exactly once
+
+
+@pytest.mark.parametrize("ips", [["127.0.0.1"], ["10.0.0.5"], ["169.254.169.254"], ["93.184.216.34", "192.168.1.1"], ["::1"]])
+def test_http_blocks_private_or_mixed_answers(monkeypatch, ips):
+    import httpx
+    from agent_app.http_safe import BlockedURL, SafeHttp
+    _fake_dns(monkeypatch, [ips])
+    http = SafeHttp()
+    http.transport = httpx.MockTransport(lambda r: pytest.fail("must not connect"))
+    with pytest.raises(BlockedURL):
+        http.get("http://evil.example/")
+
+
+def test_http_redirect_to_private_host_is_blocked(monkeypatch):
+    import httpx
+    from agent_app.http_safe import BlockedURL, SafeHttp
+    import socket
+    table = {"good.example": "93.184.216.34", "inner.example": "127.0.0.1"}
+    monkeypatch.setattr(socket, "getaddrinfo", lambda h, p, *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (table[h], p))])
+    http = SafeHttp()
+    http.transport = httpx.MockTransport(lambda r: httpx.Response(302, headers={"location": "http://inner.example/admin"}))
+    with pytest.raises(BlockedURL):
+        http.get("http://good.example/")
+
+
+def test_http_rejects_non_http_schemes():
+    from agent_app.http_safe import BlockedURL, SafeHttp
+    for u in ("file:///etc/passwd", "ftp://example.com/x", "gopher://example.com"):
+        with pytest.raises(Exception):  # httpx rejects unknown schemes itself, or BlockedURL
+            SafeHttp().get(u)
+
+
+# ---- stop button -----------------------------------------------------------------------------------------------
+
+def test_stop_mid_stream_keeps_partial_text_and_a_valid_history(env):
+    *_, agent = env
+    closed = []
+
+    class Slow(LLMProvider):
+        name = "fake"
+        def generate(self, *a): raise AssertionError
+        def stream(self, system, messages, tools):
+            try:
+                for ch in ["one ", "two ", "three ", "four "]:
+                    yield ch
+            finally:
+                closed.append(True)
+            yield Turn(text="one two three four")
+
+    s, out = Session(), []
+    for ev in agent.run(s, "go", Slow("m")):
+        out.append(ev)
+        if ev["type"] == "text_delta" and ev["text"] == "two ":
+            s.cancel.set()  # the Stop button
+    assert [e["type"] for e in out][-2:] == ["text", "cancelled"] and out[-2]["text"] == "one two"
+    assert closed == [True]                                   # the provider stream was closed, so its connection is dropped
+    last = s.messages[-1]
+    assert last["role"] == "assistant" and last["tool_calls"] == [] and last["text"].endswith("[Stopped by the user.]")
+    # the conversation can simply continue afterwards
+    ev = events(agent, "again", Scripted([Turn(text="ok")]), s)
+    assert [e["type"] for e in ev] == ["text_delta", "text", "done"]
+    assert [m["role"] for m in s.messages] == ["user", "assistant", "user", "assistant"]
+
+
+def test_stop_between_tools_still_pairs_every_tool_call_with_a_result(env):
+    db, ext, skills, agent = env
+    s, out = Session(), []
+    calls = [ToolCall(str(i), "list_tables", {}) for i in range(3)]
+    for ev in agent.run(s, "go", Scripted([Turn(tool_calls=calls)])):
+        out.append(ev)
+        if ev["type"] == "tool_result" and ev["id"] == "0":
+            s.cancel.set()
+    assert out[-1]["type"] == "cancelled"
+    tool_msg = next(m for m in s.messages if m["role"] == "tool")
+    assert [r["id"] for r in tool_msg["results"]] == ["0", "1", "2"]
+    assert not tool_msg["results"][0]["is_error"] and all("Stop" in r["content"] for r in tool_msg["results"][1:])
+    assert sum(e["type"] == "tool_call" for e in out) == 1    # the other two never ran
+    assert s.messages[-1]["role"] == "assistant" and s.messages[-1]["text"] == "[Stopped by the user.]"
+    # every provider format accepts this history
+    from agent_app.llm.anthropic_provider import AnthropicProvider
+    from agent_app.llm.ollama_provider import OllamaProvider
+    assert AnthropicProvider._convert(s.messages) and OllamaProvider._convert("sys", s.messages)
+
+
+def test_closing_on_cancel_unblocks_a_waiting_read():
+    import threading, time
+    p = Streamer([])
+    p.cancel = threading.Event()
+    blocked = threading.Event()
+    t0 = time.time()
+    threading.Timer(0.3, p.cancel.set).start()
+    with p.closing_on_cancel(blocked.set):
+        assert blocked.wait(5)                  # stands in for a socket read that only ends when the connection is closed
+    assert time.time() - t0 < 2
+    q = Streamer([])                            # no cancel event configured: plain no-op
+    with q.closing_on_cancel(lambda: pytest.fail("must not be called")):
+        pass
+
+
+def test_stop_endpoint(monkeypatch):
+    from fastapi.testclient import TestClient
+    from agent_app import main
+    c, tok = TestClient(main.app), {"X-Agent-Token": main.TOKEN}
+    assert c.post("/api/sessions/" + "0" * 32 + "/stop", headers=tok).status_code == 404
+    assert c.post("/api/sessions/" + "0" * 32 + "/stop").status_code == 403
+    sid = c.post("/api/sessions", headers=tok).json()["id"]
+    assert c.post(f"/api/sessions/{sid}/stop", headers=tok).json() == {"stopping": False}   # idle: nothing to stop
+    s = main.sessions[sid]
+    s.lock.acquire()
+    try:
+        assert c.post(f"/api/sessions/{sid}/stop", headers=tok).json() == {"stopping": True} and s.cancel.is_set()
+    finally:
+        s.lock.release()
+
+
+def test_stop_works_even_when_the_model_is_silent_and_blocked(env):
+    import threading, time
+    *_, agent = env
+    release, closed = threading.Event(), threading.Event()
+
+    class Silent(LLMProvider):
+        name = "fake"
+        def generate(self, *a): raise AssertionError
+        def _stream(self, system, messages, tools):
+            try:
+                release.wait(30)               # a blocking socket read: no chunks, nothing to poll
+                yield "late"
+            finally:
+                closed.set()
+
+    s = Session()
+    p = Silent("m"); p.cancel = s.cancel
+    threading.Timer(0.3, s.cancel.set).start()
+    t0 = time.time()
+    out = [e["type"] for e in agent.run(s, "go", p)]
+    assert out == ["cancelled"] and time.time() - t0 < 3   # returns promptly although the read is still blocked
+    release.set()                                          # the blocked read finally returns...
+    assert closed.wait(3)                                  # ...and the helper thread closes the stream (connection dropped)
+    assert s.messages[-1]["text"] == "[Stopped by the user.]"
+
+
+def test_interruptible_passes_items_and_errors_through():
+    import threading
+    class P(LLMProvider):
+        name = "fake"
+        def generate(self, *a): raise AssertionError
+        def _stream(self, *a):
+            yield "a"
+            yield Turn(text="a")
+    p = P("m"); p.cancel = threading.Event()
+    parts = list(p.stream("s", [], []))
+    assert parts[0] == "a" and parts[1].text == "a"
+
+    class Bad(P):
+        def _stream(self, *a):
+            yield "x"
+            raise RuntimeError("boom")
+    b = Bad("m"); b.cancel = threading.Event()
+    it = b.stream("s", [], [])
+    assert next(it) == "x"
+    with pytest.raises(RuntimeError, match="boom"):
+        next(it)

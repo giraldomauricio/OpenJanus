@@ -1,15 +1,50 @@
 from __future__ import annotations
 
+import json
 import re
 import uuid
-from typing import Any
+from typing import Any, Iterator
 
 import httpx
 
 from .. import config
-from .base import LLMProvider, ToolCall, ToolDef, Turn
+from .base import LLMProvider, ToolCall, ToolDef, Turn, collect
 
 _THINK = re.compile(r"<think>.*?</think>", re.S)
+
+
+class ThinkFilter:
+    """Removes <think>...</think> from a text stream, even when a tag is split across chunks."""
+
+    OPEN, CLOSE = "<think>", "</think>"
+
+    def __init__(self) -> None:
+        self.buf, self.inside = "", False
+
+    def feed(self, chunk: str) -> str:
+        self.buf += chunk
+        out = []
+        while True:
+            tag = self.CLOSE if self.inside else self.OPEN
+            i = self.buf.find(tag)
+            if i >= 0:
+                if not self.inside:
+                    out.append(self.buf[:i])
+                self.buf, self.inside = self.buf[i + len(tag):], not self.inside
+                continue
+            keep = 0  # hold back a possible partial tag at the end of the buffer
+            for n in range(min(len(tag) - 1, len(self.buf)), 0, -1):
+                if tag.startswith(self.buf[-n:]):
+                    keep = n
+                    break
+            if not self.inside:
+                out.append(self.buf[: len(self.buf) - keep])
+            self.buf = self.buf[len(self.buf) - keep:]
+            return "".join(out)
+
+    def flush(self) -> str:
+        rest, self.buf = ("" if self.inside else self.buf), ""
+        return rest
 
 
 class OllamaProvider(LLMProvider):
@@ -34,24 +69,42 @@ class OllamaProvider(LLMProvider):
         return out
 
     def generate(self, system: str, messages: list[dict[str, Any]], tools: list[ToolDef]) -> Turn:
+        return collect(self.stream(system, messages, tools))
+
+    def _stream(self, system: str, messages: list[dict[str, Any]], tools: list[ToolDef]) -> Iterator[str | Turn]:
         body = {
             "model": self.model,
-            "stream": False,
+            "stream": True,
             "messages": self._convert(system, messages),
             "tools": [{"type": "function", "function": {"name": t.name, "description": t.description,
                                                          "parameters": t.schema}} for t in tools],
             "options": {"num_ctx": config.OLLAMA_NUM_CTX},  # default context is too small for the tool schemas
         }
+        turn, raw_text, think = Turn(), "", ThinkFilter()
         try:
-            r = httpx.post(f"{config.OLLAMA_HOST}/api/chat", json=body, timeout=600)
+            with httpx.Client(timeout=httpx.Timeout(600, connect=10)) as client, self.closing_on_cancel(client.close), \
+                    client.stream("POST", f"{config.OLLAMA_HOST}/api/chat", json=body) as r:
+                if r.status_code != 200:
+                    r.read()
+                    raise RuntimeError(f"Ollama error {r.status_code}: {r.text[:500]}")
+                for line in r.iter_lines():
+                    if not line.strip():
+                        continue
+                    d = json.loads(line)
+                    if d.get("error"):
+                        raise RuntimeError(f"Ollama error: {d['error']}")
+                    msg = d.get("message") or {}
+                    if msg.get("content"):
+                        raw_text += msg["content"]
+                        if (shown := think.feed(msg["content"])):
+                            yield shown
+                    for c in msg.get("tool_calls") or []:
+                        fn = c["function"]
+                        args = fn.get("arguments") or {}
+                        turn.tool_calls.append(ToolCall(uuid.uuid4().hex[:12], fn["name"], args if isinstance(args, dict) else {}))
         except httpx.ConnectError as e:
             raise RuntimeError(f"Cannot reach Ollama at {config.OLLAMA_HOST}. Is `ollama serve` running?") from e
-        if r.status_code != 200:
-            raise RuntimeError(f"Ollama error {r.status_code}: {r.text[:500]}")
-        msg = r.json()["message"]
-        turn = Turn(text=_THINK.sub("", msg.get("content") or "").strip())
-        for c in msg.get("tool_calls") or []:
-            fn = c["function"]
-            args = fn.get("arguments") or {}
-            turn.tool_calls.append(ToolCall(uuid.uuid4().hex[:12], fn["name"], args if isinstance(args, dict) else {}))
-        return turn
+        if (rest := think.flush()):
+            yield rest
+        turn.text = _THINK.sub("", raw_text).strip()
+        yield turn

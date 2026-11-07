@@ -50,8 +50,9 @@ def require_token(x_agent_token: str = Header(default="")) -> None:
 
 
 @app.get("/", response_class=HTMLResponse)
-def index() -> str:
-    return INDEX.replace("__TOKEN__", TOKEN)
+def index() -> HTMLResponse:
+    # no-store: a cached or restored page would carry the token of a previous server process
+    return HTMLResponse(INDEX.replace("__TOKEN__", TOKEN), headers={"Cache-Control": "no-store"})
 
 
 @app.get("/logo.png", include_in_schema=False)
@@ -89,7 +90,7 @@ def read_session(sid: str) -> dict[str, Any]:
     s = get_session(sid)
     if s is None:
         raise HTTPException(404, "Unknown session")
-    return {"id": s.id, "title": s.title, "events": s.events}
+    return {"id": s.id, "title": s.title, "provider": s.provider, "model": s.model, "events": s.events}
 
 
 @app.delete("/api/sessions/{sid}", dependencies=[Depends(require_token)])
@@ -99,6 +100,17 @@ def delete_session(sid: str) -> dict[str, bool]:
         raise HTTPException(409, "This session is running a request")
     sessions.pop(sid, None)
     return {"deleted": store.delete(sid)}
+
+
+@app.post("/api/sessions/{sid}/stop", dependencies=[Depends(require_token)])
+def stop_session(sid: str) -> dict[str, bool]:
+    s = sessions.get(sid)
+    if s is None:
+        raise HTTPException(404, "Unknown session")
+    running = s.lock.locked()
+    if running:
+        s.cancel.set()
+    return {"stopping": running}
 
 
 class ChatRequest(BaseModel):
@@ -128,10 +140,12 @@ def chat(req: ChatRequest) -> StreamingResponse:
                 return
             if not session.title:
                 session.title = " ".join(req.message.split())[:60]
-            session.events.append({"type": "user", "text": req.message})
+            provider.cancel = session.cancel
+            session.provider, session.model = req.provider, provider.model
+            session.events.append({"type": "user", "text": req.message, "provider": req.provider, "model": provider.model})
             try:
                 for ev in agent.run(session, req.message, provider):
-                    if ev["type"] != "done":
+                    if ev["type"] not in ("done", "text_delta"):  # deltas are transient; the final "text" event is what is replayed
                         session.events.append(ev)
                     yield sse(ev)
             finally:  # also runs if the browser disconnects mid-stream
@@ -192,6 +206,14 @@ def audit_db() -> dict[str, Any]:
 @app.get("/api/db")
 def db_overview() -> dict[str, Any]:
     return {"tables": db.list_tables(), "models": [s.model_dump() for s in db.all_specs()]}
+
+
+@app.get("/api/db/{table}/csv")
+def db_table_csv(table: str) -> StreamingResponse:
+    if table not in db.table_names():
+        raise HTTPException(404, f"No such table: {table}")
+    return StreamingResponse(db.export_csv(table), media_type="text/csv; charset=utf-8",
+                             headers={"Content-Disposition": f'attachment; filename="{table}.csv"'})
 
 
 @app.get("/api/db/{table}")

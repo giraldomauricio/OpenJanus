@@ -12,14 +12,14 @@
           --ok:#4ade80; --bad:#f87171; --warn:#fbbf24;
           --code-bg:var(--code-bg); --user-bg:var(--user-bg); --on-accent:#0b1020; --on-warn:#000; --radius:10px; --radius-sm:6px; --pill:99px;
           --font:-apple-system, system-ui, sans-serif; --mono:ui-monospace, SFMono-Regular, Menlo, monospace;
-          --glow:none; --card-shadow:none; --logo-filter:invert(1); color-scheme:dark; }
+          --glow:none; --card-shadow:none; --logo-filter:invert(1); --s1:var(--accent); --s2:var(--ok); --s3:var(--warn); --s4:var(--bad); color-scheme:dark; }
   :root[data-theme="light"] { --bg:#fbf8f3; --panel:#f1ece4; --line:#ded5c8; --text:#4a4458; --muted:#746c82; --accent:#8e9bef;
           --ok:#5fae8a; --bad:#d9778b; --warn:#d9a35f; --code-bg:#ece6f4; --user-bg:#dfe6fb; --on-accent:#2b2740; --on-warn:#2b2740;
           --card-shadow:0 1px 3px rgba(120,100,140,.12); --logo-filter:none; color-scheme:light; }
   :root[data-theme="hacker"] { --bg:#000800; --panel:#03120a; --line:#0f4a1f; --text:#33ff66; --muted:#1f9e45; --accent:#00ff9c;
           --ok:#33ff66; --bad:#ff4d4d; --warn:#ffd23f; --code-bg:#001a08; --user-bg:#06240f; --on-accent:#001a08; --on-warn:#001a08;
           --radius:0; --radius-sm:0; --pill:0; --font:ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-          --glow:0 0 6px rgba(51,255,102,.45); --logo-filter:invert(1) sepia(1) saturate(7) hue-rotate(75deg) drop-shadow(0 0 4px rgba(51,255,102,.6)); color-scheme:dark; }
+          --s1:#00ff9c; --s2:#ffd23f; --s3:#4dd2ff; --s4:#ff6b6b; --glow:0 0 6px rgba(51,255,102,.45); --logo-filter:invert(1) sepia(1) saturate(7) hue-rotate(75deg) drop-shadow(0 0 4px rgba(51,255,102,.6)); color-scheme:dark; }
   * { box-sizing: border-box; }
   body { margin:0; height:100vh; display:flex; flex-direction:column; background:var(--bg); color:var(--text);
          font:14px/1.5 var(--font); }
@@ -28,7 +28,7 @@
   select, input, button, textarea { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:var(--radius-sm);
          padding:6px 10px; font:inherit; }
   select:focus, input:focus, textarea:focus, button:focus-visible { outline:none; border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
-  header > * { flex-shrink:0; } header #history { flex:1 1 120px; min-width:0; } header #model { width:170px; min-width:0; }
+  header { flex-wrap:wrap; } header > * { flex-shrink:0; } header #history { flex:1 1 160px; min-width:110px; } header #model { width:170px; min-width:0; }
   header button { white-space:nowrap; }
   button { cursor:pointer; } button:hover { border-color:var(--accent); }
   button.primary { background:var(--accent); color:var(--on-accent); border-color:var(--accent); font-weight:600; }
@@ -91,6 +91,19 @@
   .count { background:var(--warn); color:var(--on-warn); border-radius:var(--pill); padding:0 7px; font-size:11px; margin-left:6px; }
   table { border-collapse:collapse; width:100%; font-size:12px; } td, th { border-bottom:1px solid var(--line); padding:3px 6px; text-align:left; }
   /* "agent is working" indicator: always the last item in the chat log */
+  details.tool.result { width:min(100%, 640px); max-width:100%; }
+  details.tool.result .tblwrap { max-height:260px; } .result .note { margin:6px 0 0; font-size:12px; color:var(--warn); }
+  .result .actions { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 2px; align-items:center; } .result .actions button { font-size:12px; padding:3px 10px; }
+  .chartbox { margin-top:8px; } .chartbox svg { display:block; background:var(--bg); border:1px solid var(--line); border-radius:var(--radius-sm); }
+  .chartbox .ctl { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:6px; font-size:12px; }
+  .chartbox label { display:inline-flex; gap:5px; align-items:center; cursor:pointer; border:1px solid var(--line); border-radius:var(--pill); padding:1px 9px; }
+  .chartbox label i { width:8px; height:8px; border-radius:50%; display:inline-block; } .chartbox select { padding:2px 6px; font-size:12px; }
+  .msg .who { display:block; margin-top:3px; font-size:11px; color:var(--muted); text-align:right; }
+  .msg.streaming::after { content:"▍"; color:var(--accent); animation:blink 1s steps(1) infinite; margin-left:1px; }
+  @media (prefers-reduced-motion: reduce) { .msg.streaming::after { animation:none; } }
+  button.danger:disabled { opacity:.4; cursor:not-allowed; }
+  a.btnlink { display:inline-block; margin:2px 6px 2px 0; padding:4px 10px; font-size:12px; border:1px solid var(--line); border-radius:var(--radius-sm); color:var(--text); text-decoration:none; }
+  a.btnlink:hover { border-color:var(--accent); }
   .working { align-self:flex-start; display:flex; align-items:center; gap:10px; color:var(--muted); font-size:13px; padding:4px 2px; }
   .working .dots { display:inline-flex; gap:4px; } .working .dots i { width:6px; height:6px; border-radius:50%; background:var(--accent);
          animation:pulse 1.2s infinite ease-in-out; } .working .dots i:nth-child(2) { animation-delay:.2s; } .working .dots i:nth-child(3) { animation-delay:.4s; }
@@ -140,6 +153,7 @@
   <button id="import">Import CSV…</button>
   <input type="file" id="file" accept=".csv,text/csv" hidden>
   <button id="new">New chat</button>
+  <button id="del" class="danger" title="Delete this chat" disabled>🗑</button>
 </header>
 <main>
   <section id="chat">
@@ -234,9 +248,24 @@ function renderMarkdown(src) {
 }
 function mdNode(text) { const d = el("div", "msg assistant md"); d.innerHTML = renderMarkdown(text); return d; }
 
+// The token changes whenever the server restarts. A page opened before that (or restored by the browser) holds a dead
+// token, so reload to get a fresh one, keeping whatever the user was typing/sending.
+let pendingDraft = "";
+function staleToken() {
+  const last = +sessionStorage.staleReload || 0;
+  if (Date.now() - last < 10000) return;  // already tried just now: show the error instead of looping
+  sessionStorage.staleReload = Date.now();
+  if (pendingDraft || $("#input").value) sessionStorage.draft = pendingDraft || $("#input").value;
+  add(el("div", "msg warning", "⚠ The server was restarted, so this page's session expired. Reloading… (your message is kept)"));
+  setTimeout(() => location.reload(), 1200);
+}
 async function api(path, opts = {}) {
   const r = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", "X-Agent-Token": TOKEN, ...(opts.headers || {}) } });
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  if (!r.ok) {
+    const detail = (await r.json().catch(() => ({}))).detail || r.statusText;
+    if (r.status === 403 && /token/i.test(String(detail))) { staleToken(); throw new Error("Session expired: reload the page (Cmd/Ctrl+R)."); }
+    throw new Error(detail);
+  }
   return r;
 }
 
@@ -244,6 +273,7 @@ $("#theme").value = document.documentElement.dataset.theme;
 $("#theme").onchange = () => { document.documentElement.dataset.theme = localStorage.theme = $("#theme").value; };
 
 async function init() {
+  if (sessionStorage.draft) { $("#input").value = sessionStorage.draft; delete sessionStorage.draft; }
   cfg = await (await api("/api/config")).json();
   const sel = $("#provider");
   for (const [name, info] of Object.entries(cfg.providers)) {
@@ -272,6 +302,9 @@ $("#new").onclick = newChat;
 async function openChat(id) {
   const d = await (await api("/api/sessions/" + id)).json();
   sessionId = d.id; $("#log").replaceChildren();
+  if (d.provider && cfg.providers[d.provider]) {  // continue the chat with the provider/model it last used
+    $("#provider").value = localStorage.provider = d.provider; setModel(); if (d.model) $("#model").value = d.model;
+  }
   const tools = {};
   for (const ev of d.events) handle(ev, tools);
   await refreshHistory();
@@ -281,11 +314,18 @@ async function refreshHistory() {
   sel.replaceChildren();
   const cur = el("option", "", list.some(x => x.id === sessionId) ? "History…" : "New chat (unsaved)"); cur.value = ""; sel.append(cur);
   for (const x of list) {
-    const o = el("option", "", (x.id === sessionId ? "● " : "") + x.title + " — " + new Date(x.updated * 1000).toLocaleString());
+    const o = el("option", "", (x.id === sessionId ? "● " : "") + x.title + " — " + (x.provider ? `${x.provider}${x.model ? "/" + x.model : ""} — ` : "")
+      + new Date(x.updated * 1000).toLocaleString());
     o.value = x.id; sel.append(o);
   }
-  sel.value = "";
+  sel.value = ""; $("#del").disabled = busy || !list.some(x => x.id === sessionId);
 }
+$("#del").onclick = async () => {
+  if (busy || !confirm("Delete this chat permanently? This cannot be undone.")) return;
+  try { await api("/api/sessions/" + sessionId, { method: "DELETE" }); } catch (e) { alert("Could not delete: " + e.message); return; }
+  const next = (await (await api("/api/sessions")).json())[0];
+  if (next) await openChat(next.id); else await newChat();
+};
 
 
 function prefill(text) { $("#input").value = text; $("#input").focus(); }
@@ -314,6 +354,11 @@ function showWelcome() {
     const b = el("button", "", t); b.type = "button"; b.onclick = () => prefill(t); chips.append(b);
   }
   w.append(chips); $("#log").append(w);
+}
+function userNode(text, provider, model) {
+  const d = el("div", "msg user"); d.append(document.createTextNode(text));
+  if (provider) d.append(el("span", "who", model ? `${provider} · ${model}` : provider));
+  return d;
 }
 function add(node) {
   $("#welcome")?.remove();
@@ -345,9 +390,27 @@ function toolNode(ev) {
   return d;
 }
 
+// While a reply is running the Send button turns into Stop. Enter never stops a run (it is ignored while busy); Esc or the button does.
+let stopping = false;
+function setSendMode(mode) {
+  const b = $("#send");
+  b.disabled = false; b.classList.toggle("primary", mode === "send"); b.classList.toggle("danger", mode === "stop");
+  b.textContent = mode === "stop" ? "■ Stop" : "Send"; b.title = mode === "stop" ? "Stop the reply (Esc)" : "";
+}
+async function stopRun() {
+  if (!busy || stopping) return;
+  stopping = true; $("#send").disabled = true; $("#send").textContent = "Stopping…"; setWorking("Stopping…");
+  const slow = setTimeout(() => setWorking("Stopping… waiting for the current step to finish"), 5000);
+  try { await api(`/api/sessions/${sessionId}/stop`, { method: "POST" }); } catch (e) { /* the stream's own end/error handling covers it */ }
+  clearTimeout(slow);
+}
+$("#send").addEventListener("click", e => { if (busy) { e.preventDefault(); stopRun(); } });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && busy) stopRun(); });
+
 async function send(text) {
-  busy = true; $("#send").disabled = true;
-  add(el("div", "msg user", text));
+  busy = true; stopping = false; setSendMode("stop"); $("#del").disabled = true;
+  add(userNode(text, $("#provider").value, $("#model").value.trim()));
+  pendingDraft = text;
   const tools = {}, model = $("#model").value.trim() || $("#provider").value;
   showWorking(`Waiting for ${model}…`);
   try {
@@ -363,14 +426,184 @@ async function send(text) {
       }
     }
   } catch (e) { add(el("div", "msg error", String(e.message || e))); }
-  hideWorking();
-  busy = false; $("#send").disabled = false; refreshHistory(); refreshApprovals(); refreshCaps(); refreshDb(); $("#input").focus();
+  finishStream(); hideWorking(); pendingDraft = "";
+  busy = false; setSendMode("send"); refreshHistory(); refreshApprovals(); refreshCaps(); refreshDb(); $("#input").focus();
+}
+
+
+// ---- results: preview table, CSV download, chart (only offered when they make sense) --------------------------------
+// results:begin
+const NUM = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/;
+const DATE = /^\d{4}-\d{2}(-\d{2})?([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+const toNum = v => typeof v === "number" ? v : parseFloat(v);
+
+function profileColumns(t) {
+  return t.columns.map((name, i) => {
+    const vals = t.rows.map(r => r[i]).filter(v => v !== null && v !== undefined && v !== "");
+    const isNum = vals.length > 0 && vals.every(v => typeof v === "number" || (typeof v === "string" && NUM.test(v.trim())));
+    const isDate = !isNum && vals.length > 0 && vals.every(v => typeof v === "string" && DATE.test(v.trim()));
+    const avgLen = vals.length ? vals.reduce((a, v) => a + String(v).length, 0) / vals.length : 0;
+    return { name, i, kind: isNum ? "number" : isDate ? "date" : "text", n: vals.length, distinct: new Set(vals).size,
+             idLike: /(^|_)id$/i.test(name), avgLen };
+  });
+}
+
+// Decide whether a chart is worth offering. Returns null for lists of names, single values, ids, free text, huge results...
+function chartSpec(t) {
+  const n = t.rows.length; if (n < 2 || n > 500) return null;
+  const cols = profileColumns(t);
+  const nums = cols.filter(c => c.kind === "number" && c.n >= 2 && c.distinct >= 2 && !c.idLike);  // constant/id columns say nothing
+  const full = c => c.n === n && c.distinct === n;                                                   // one point per row
+  const date = cols.find(c => c.kind === "date" && full(c));
+  const label = cols.find(c => c.kind === "text" && full(c) && n <= 50 && c.avgLen <= 40);
+  const x = date || label;
+  if (x && nums.length) return { type: date ? "line" : "bar", types: date ? (n <= 60 ? ["line", "bar"] : ["line"]) : ["bar"],
+                                 x: x.i, ys: nums.slice(0, 4).map(c => c.i), numCols: nums.map(c => c.i) };
+  if (!x && nums.length >= 2 && n >= 5) return { type: "scatter", types: ["scatter"], x: nums[0].i, ys: [nums[1].i], numCols: nums.map(c => c.i) };
+  return null;
+}
+
+function csvCell(v) {
+  if (v === null || v === undefined) return "";
+  let s = typeof v === "object" ? JSON.stringify(v) : String(v);
+  if (typeof v === "string" && /^[=+\-@\t\r]/.test(s) && !NUM.test(s.trim())) s = "'" + s;  // stop spreadsheets running text as a formula
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+const toCsv = t => "﻿" + [t.columns, ...t.rows].map(r => r.map(csvCell).join(",")).join("\r\n") + "\r\n";  // BOM: Excel reads UTF-8
+function downloadCsv(t) {
+  const a = el("a"), d = new Date(), p = n => String(n).padStart(2, "0");
+  a.href = URL.createObjectURL(new Blob([toCsv(t)], { type: "text/csv;charset=utf-8" }));
+  a.download = `openjanus-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.csv`;
+  document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+const SVGNS = "http://www.w3.org/2000/svg", SERIES_COLORS = ["var(--s1)", "var(--s2)", "var(--s3)", "var(--s4)"];
+const sv = (tag, attrs = {}, text) => { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text !== undefined) e.textContent = text; return e; };
+const fmtNum = v => Math.abs(v) >= 10000 ? new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(v) : String(+v.toFixed(2));
+function niceTicks(min, max, count = 5) {
+  if (min === max) max = min + 1;
+  const raw = (max - min) / count, mag = 10 ** Math.floor(Math.log10(raw)), norm = raw / mag;
+  const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag, ticks = [];
+  for (let v = Math.floor(min / step) * step; v <= Math.ceil(max / step) * step + step / 2; v += step) ticks.push(+v.toPrecision(12));
+  return ticks;
+}
+const clip = (s, n) => s.length > n ? s.slice(0, n - 1) + "…" : s;
+
+// st = { type: "bar" | "line" | "scatter", x: column index, ys: [column indexes] }
+function renderChart(t, st) {
+  const W = 600, H = 300, scatter = st.type === "scatter";
+  let rows = t.rows; if (st.type === "line") rows = [...rows].sort((a, b) => String(a[st.x]).localeCompare(String(b[st.x])));  // ISO dates sort as text
+  const n = rows.length, rotate = !scatter && n > 8, m = { l: 54, r: 14, t: 14, b: rotate ? 70 : 36 };
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", role: "img", "aria-label": `${st.type} chart` }); svg.style.maxWidth = W + "px";
+  const series = st.ys.map((yi, k) => ({ name: t.columns[yi], color: SERIES_COLORS[k % SERIES_COLORS.length],
+    vals: rows.map(r => { const v = toNum(r[yi]); return Number.isFinite(v) ? v : null; }) }));
+  const all = series.flatMap(s => s.vals).filter(v => v !== null);
+  if (!all.length) return el("p", "", "Nothing numeric to plot.");
+  let lo = Math.min(...all), hi = Math.max(...all); if (st.type === "bar") { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
+  const yt = niceTicks(lo, hi), y0 = yt[0], y1 = yt[yt.length - 1], pw = W - m.l - m.r, ph = H - m.t - m.b;
+  const Y = v => m.t + ph - (v - y0) / (y1 - y0) * ph;
+  for (const v of yt) svg.append(sv("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: "var(--line)" }),
+    sv("text", { x: m.l - 6, y: Y(v) + 3, "text-anchor": "end", fill: "var(--muted)", "font-size": 10 }, fmtNum(v)));
+  const tip = (node, text) => { node.append(sv("title", {}, text)); return node; };
+  const xlabel = (x, text) => { const tx = sv("text", { x, y: H - m.b + 14, fill: "var(--muted)", "font-size": 10, "text-anchor": rotate ? "end" : "middle" }, clip(text, 16));
+    if (rotate) tx.setAttribute("transform", `rotate(-35 ${x} ${H - m.b + 14})`); svg.append(tx); };
+  if (scatter) {
+    const xs = rows.map(r => toNum(r[st.x])), fin = xs.filter(Number.isFinite), xt = niceTicks(Math.min(...fin), Math.max(...fin));
+    const x0 = xt[0], x1 = xt[xt.length - 1], X = v => m.l + (v - x0) / (x1 - x0) * pw;
+    for (const v of xt) xlabel(X(v), fmtNum(v));
+    rows.forEach((r, i) => { const v = series[0].vals[i]; if (Number.isFinite(xs[i]) && v !== null)
+      svg.append(tip(sv("circle", { cx: X(xs[i]), cy: Y(v), r: 3.5, fill: series[0].color, "fill-opacity": .75 }), `${t.columns[st.x]}: ${xs[i]}\n${series[0].name}: ${v}`)); });
+    svg.append(sv("text", { x: W - m.r, y: H - 6, "text-anchor": "end", fill: "var(--muted)", "font-size": 10 }, t.columns[st.x]));
+  } else {
+    const band = pw / n, cx = i => m.l + band * (i + .5), labels = rows.map(r => String(r[st.x] ?? ""));
+    const stride = Math.ceil(n / Math.max(1, Math.floor(pw / (rotate ? 16 : 56))));
+    labels.forEach((lb, i) => { if (i % stride === 0) xlabel(cx(i), lb); });
+    if (st.type === "bar") {
+      const gw = band * .78, bw = gw / series.length;
+      series.forEach((s, k) => s.vals.forEach((v, i) => { if (v === null) return;
+        const top = Math.min(Y(v), Y(0)), h = Math.max(1, Math.abs(Y(v) - Y(0)));
+        svg.append(tip(sv("rect", { x: cx(i) - gw / 2 + k * bw, y: top, width: Math.max(1, bw - 1), height: h, fill: s.color, "fill-opacity": .85 }), `${labels[i]}\n${s.name}: ${v}`)); }));
+    } else series.forEach(s => {
+      const pts = s.vals.map((v, i) => v === null ? null : [cx(i), Y(v), i, v]).filter(Boolean);
+      svg.append(sv("polyline", { points: pts.map(p => p[0] + "," + p[1]).join(" "), fill: "none", stroke: s.color, "stroke-width": 2 }));
+      if (n <= 100) pts.forEach(p => svg.append(tip(sv("circle", { cx: p[0], cy: p[1], r: 2.8, fill: s.color }), `${labels[p[2]]}\n${s.name}: ${p[3]}`)));
+    });
+  }
+  return svg;
+}
+
+function chartBox(t, spec) {
+  const box = el("div", "chartbox"), ctl = el("div", "ctl"), area = el("div");
+  const st = { type: spec.type, x: spec.x, ys: [...spec.ys] }, draw = () => area.replaceChildren(renderChart(t, st));
+  if (spec.types.length > 1) {
+    const sel = el("select"); spec.types.forEach(k => { const o = el("option", "", k); o.value = k; sel.append(o); });
+    sel.onchange = () => { st.type = sel.value; draw(); }; ctl.append(sel);
+  }
+  if (spec.type === "scatter") {
+    for (const [label, key] of [["x", "x"], ["y", "y"]]) {
+      const sel = el("select"); ctl.append(el("span", "", label));
+      spec.numCols.forEach(ci => { const o = el("option", "", t.columns[ci]); o.value = ci; sel.append(o); });
+      sel.value = key === "x" ? st.x : st.ys[0];
+      sel.onchange = () => { key === "x" ? st.x = +sel.value : st.ys = [+sel.value]; draw(); }; ctl.append(sel);
+    }
+  } else spec.numCols.forEach(ci => {
+    const lab = el("label"), cb = el("input"), dot = el("i"); cb.type = "checkbox"; cb.checked = st.ys.includes(ci);
+    cb.onchange = () => { const next = cb.checked ? [...st.ys, ci] : st.ys.filter(v => v !== ci);
+      if (!next.length) { cb.checked = true; return; } st.ys = next.sort((a, b) => a - b); recolor(); draw(); };
+    lab.append(cb, dot, document.createTextNode(t.columns[ci])); lab._ci = ci; lab._dot = dot; ctl.append(lab);
+  });
+  const recolor = () => ctl.querySelectorAll("label").forEach(l => { const k = st.ys.indexOf(l._ci); l._dot.style.background = k < 0 ? "transparent" : SERIES_COLORS[k % SERIES_COLORS.length]; });
+  recolor(); box.append(ctl, area); draw(); return box;
+}
+
+function resultCard(t) {
+  const n = t.rows.length, d = el("details", "tool result"); d.open = n <= 15;
+  d.append(el("summary", "", `▦ Result: ${n}${t.truncated ? "+" : ""} rows × ${t.columns.length} ${t.columns.length === 1 ? "column" : "columns"}`));
+  if (t.truncated) d.append(el("p", "note", `The query hit its row limit: this shows the first ${n} rows only. Ask for a higher limit or a narrower query to get the rest.`));
+  const tbl = el("table"), head = el("tr"), wrap = el("div", "tblwrap");
+  t.columns.forEach(h => head.append(el("th", "", h))); tbl.append(head);
+  t.rows.slice(0, 50).forEach(r => { const tr = el("tr"); r.forEach(v => tr.append(cellNode(v))); tbl.append(tr); });
+  wrap.append(tbl); d.append(wrap);
+  if (n > 50) d.append(el("p", "", `Showing the first 50 of ${n} rows here. The CSV has all ${n}.`));
+  const actions = el("div", "actions"), csv = el("button", "", `⬇ Download CSV (${n} rows)`); csv.type = "button"; csv.onclick = () => downloadCsv(t);
+  actions.append(csv);
+  const spec = chartSpec(t);
+  if (spec) {
+    let box = null; const b = el("button", "", "📊 Chart"); b.type = "button";
+    b.onclick = () => { if (box) { box.remove(); box = null; b.textContent = "📊 Chart"; } else { box = chartBox(t, spec); d.append(box); b.textContent = "Hide chart"; } };
+    actions.append(b);
+  }
+  d.append(actions); return d;
+}
+// results:end
+
+// Live reply: deltas grow one bubble (markdown re-rendered at most once per frame); the final "text" event replaces it.
+let live = null, liveText = "", liveRaf = 0;
+function streamDelta(chunk) {
+  if (!live) { live = add(el("div", "msg assistant md streaming")); liveText = ""; setWorking(`${$("#model").value.trim() || $("#provider").value} is writing…`); }
+  liveText += chunk;
+  if (!liveRaf) liveRaf = requestAnimationFrame(() => {
+    liveRaf = 0; if (!live) return;
+    live.innerHTML = renderMarkdown(liveText);
+    const log = $("#log"); if (log.scrollHeight - log.scrollTop - log.clientHeight < 140) log.scrollTop = log.scrollHeight;  // do not yank the view if the user scrolled up
+  });
+}
+function finishStream(finalText) {
+  if (liveRaf) { cancelAnimationFrame(liveRaf); liveRaf = 0; }
+  if (live && finalText === undefined) {  // interrupted: keep what arrived, drop the cursor
+    if (liveText.trim()) live.classList.remove("streaming"); else live.remove();
+    live = null; return;
+  }
+  if (live) { live.remove(); live = null; }
+  if (finalText) add(mdNode(finalText));
 }
 
 function handle(ev, tools) {
-  if (ev.type === "user") add(el("div", "msg user", ev.text));
-  else if (ev.type === "text") { add(mdNode(ev.text)); setWorking(`Waiting for ${$("#model").value.trim() || $("#provider").value}…`); }
-  else if (ev.type === "error") add(el("div", "msg error", ev.text));
+  if (ev.type === "user") add(userNode(ev.text, ev.provider, ev.model));
+  else if (ev.type === "cancelled") { finishStream(); add(el("div", "msg warning", "■ Stopped. You can continue the conversation.")); }
+  else if (ev.type === "text_delta") streamDelta(ev.text)
+  else if (ev.type === "text") { finishStream(ev.text); setWorking(`Waiting for ${$("#model").value.trim() || $("#provider").value}…`); }
+  else if (ev.type === "error") { finishStream(); add(el("div", "msg error", ev.text)); }
   else if (ev.type === "warning") add(el("div", "msg warning", "⚠ " + ev.text));
   else if (ev.type === "tool_call") { tools[ev.id] = add(toolNode(ev)); setWorking(`Running ${ev.name}…`); }
   else if (ev.type === "tool_result") {
@@ -380,6 +613,7 @@ function handle(ev, tools) {
     d.querySelector("summary").textContent = (ev.ok ? "✓ " : "✗ ") + ev.name;
     d.append(el("pre", "", ev.content));
     if (ev.name.startsWith("propose_") && ev.ok) { refreshApprovals(); refreshCaps(); }
+    if (ev.table && ev.table.rows.length >= 2) add(resultCard(ev.table));  // a single row/value does not need a table, CSV or chart
   }
 }
 
@@ -572,6 +806,8 @@ async function refreshDb() {
       learn.onclick = () => prefill(`Learn the table ${t.table}: profile it, adopt it as a model, look for relationships with my other tables, and tell me what you found.`);
       body.push(learn);
     }
+    const dl = el("a", "", "⬇ Download CSV"); dl.href = `/api/db/${encodeURIComponent(t.table)}/csv`; dl.download = t.table + ".csv"; dl.className = "btnlink";
+    dl.title = `All ${t.rows} rows`; body.push(dl);
     body.push(out);
     pane.append(collapsible("table:" + t.table, head, body, () => loadPreview(t.table, out)));
   }
