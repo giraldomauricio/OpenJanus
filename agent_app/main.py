@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import config, images
@@ -19,7 +19,7 @@ from .agent import Agent, Session
 from .db import Database
 from .db import file_import
 from .db.csv_import import import_csv
-from .extensions import ExtensionManager, ProposalError
+from .extensions import ExtensionManager, PackageError, ProposalError
 from .llm import PROVIDERS, make_provider, ollama_models, provider_status
 from .introspection import audit_capabilities, audit_database
 from .sdk import BUILTIN_TOOLS
@@ -211,6 +211,28 @@ def list_extensions() -> dict[str, Any]:
     return {"pending": extensions.list_items("pending"), "approved": approved, "problems": extensions.integrity_problems()}
 
 
+@app.get("/api/extensions/export")
+def export_extensions(items: str = "") -> Response:
+    """Download approved tools/skills as a .janus package. `items` = "tool:name,skill:name" (empty = everything approved)."""
+    try:
+        wanted = [tuple(x.split(":", 1)) for x in items.split(",") if x] or None
+        data, included = extensions.export_package(wanted)  # type: ignore[arg-type]
+    except (PackageError, ValueError) as e:
+        raise HTTPException(400, str(e)) from e
+    fname = (included[0]["name"] if len(included) == 1 else "openjanus-extensions") + ".janus"
+    return Response(data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@app.post("/api/extensions/import", dependencies=[Depends(require_token)])
+async def import_extensions(request: Request) -> dict:
+    """Raw package bytes in the body. Everything lands in PENDING; nothing is approved here."""
+    raw = await request.body()
+    try:
+        return await run_in_threadpool(extensions.import_package, raw)
+    except PackageError as e:
+        raise HTTPException(400, str(e)) from e
+
+
 @app.get("/api/extensions/{kind}/{name}/source")
 def extension_source(kind: Literal["tool", "skill"], name: str, status: Literal["pending", "approved"] = "pending") -> dict:
     try:
@@ -286,8 +308,6 @@ async def import_csv_endpoint(request: Request, table: str) -> dict[str, Any]:
 
 
 if config.DIAGRAMS_ENABLED:  # optional feature pack: draw.io files (tools in agent_app/tools/diagrams.py)
-    from fastapi.responses import Response
-
     from .diagrams.drawio import read_drawio
     from .diagrams.store import DiagramStore, clean_name
 

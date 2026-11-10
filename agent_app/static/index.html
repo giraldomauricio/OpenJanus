@@ -920,6 +920,10 @@ function itemCard(it, pending) {
       openKeys.delete(key); refreshApprovals(); refreshCaps();
     };
     row.append(gone);
+    const exp = el("button", "", "Export");
+    exp.title = "Download as a .janus package to share (a skill includes the tools it uses)";
+    exp.onclick = () => downloadPackage(`${it.kind}:${it.name}`);
+    row.append(exp);
   }
   if (pending) {
     const ok = el("button", "primary", "Approve"), no = el("button", "danger", "Reject");
@@ -1012,11 +1016,36 @@ async function refreshCaps() {
   capData = await (await api("/api/capabilities")).json(); drawCaps();
 }
 
+function downloadPackage(items) {
+  const a = document.createElement("a"); a.href = "/api/extensions/export" + (items ? "?items=" + encodeURIComponent(items) : "");
+  document.body.append(a); a.click(); a.remove();
+}
+
+function packageBar() {
+  const bar = el("div", "toolbar"), file = document.createElement("input");
+  file.type = "file"; file.accept = ".janus,.zip"; file.style.display = "none";
+  const imp = el("button", "", "Import package"), exp = el("button", "", "Export all approved");
+  imp.title = "Install tools/skills from a .janus file. They arrive as pending: nothing is used until you approve it.";
+  imp.onclick = () => file.click();
+  exp.onclick = () => downloadPackage("");
+  file.onchange = async () => {
+    const f = file.files[0]; file.value = ""; if (!f) return;
+    try {
+      const r = await (await api("/api/extensions/import", { method: "POST", body: f, headers: { "Content-Type": "application/octet-stream" } })).json();
+      let m = `Imported ${r.imported.length} item(s) as PENDING. Review them below before approving.`;
+      if (r.skipped.length) m += "\n\nSkipped:\n" + r.skipped.map(s => `- ${s.kind || "?"} ${s.name || "?"}: ${s.reason}`).join("\n");
+      alert(m);
+    } catch (e) { alert("Import failed: " + e.message); }
+    refreshApprovals(); refreshCaps();
+  };
+  bar.append(imp, exp, file); return bar;
+}
+
 async function refreshApprovals() {
   const d = await (await api("/api/extensions")).json();
   const pane = $("#approvals"); pane.replaceChildren();
   $("#pendingCount").replaceChildren(); if (d.pending.length) $("#pendingCount").append(el("span", "count", d.pending.length));
-  pane.append(toolbar(pane));
+  pane.append(packageBar(), toolbar(pane));
   pane.append(el("h3", "", "Pending review"));
   if (!d.pending.length) pane.append(el("p", "", "Nothing waiting. Ask the agent for a new tool or skill."));
   d.pending.forEach(i => pane.append(itemCard(i, true)));

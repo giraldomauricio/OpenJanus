@@ -235,6 +235,16 @@ class ExtensionManager:
                 shutil.move(src.parent, dest_dir / f"{name}.{stamp}")
             return {"rejected": name, "kind": kind}
 
+    # --- sharing (packages are .janus ZIP files; importing only ever creates PENDING items) -------------
+
+    def export_package(self, items: list[tuple[str, str]] | None = None) -> tuple[bytes, list[dict[str, str]]]:
+        from .package import export_package
+        return export_package(self, items)
+
+    def import_package(self, raw: bytes) -> dict[str, Any]:
+        from .package import import_package
+        return import_package(self, raw)
+
     # --- loading (used by the agent each turn) -----------------------------
 
     def _verified(self, kind: Kind) -> tuple[list[tuple[str, Path]], list[str]]:
