@@ -56,6 +56,17 @@ a notice appears if the query hit its limit) and neutralises spreadsheet formula
 is one point per row and a numeric column: dates -> line, labels (<= 50, unique) -> bar, two numeric columns -> scatter. Lists of
 names, ids, single values and free text get no chart. Charts are dependency-free SVG (`renderChart` in `index.html`).
 
+**Schema changes.** `alter_model` adds, drops, renames and changes fields (type, required, unique, default, references) and
+`convert_column` turns TEXT columns into integer / number / boolean / date / datetime. Both are **dry-run by default**: the change is
+executed in a transaction and rolled back, so the report (`plan`, `problems`, `failures`, before/after `sample`) is exact; `apply: true`
+repeats it for real after taking a backup (`data/backups/`, newest 10 kept). Conversions are strict: values that do not parse are listed
+(use `date_format` for non-ISO dates, `on_error: "null"` to opt into data loss). Tables made by `define_model` are rebuilt when needed
+(constraints and foreign keys kept); your own adopted tables only get SQLite's native add/rename/drop column and a column swap for
+`convert_column` (the column moves to the end), never a rebuild. The agent is told to ask you before applying.
+
+**Stopping.** The Send button becomes **Stop** (or press Esc) while a reply is running. The model connection is dropped (even while a
+reasoning model is silent), tools not yet started are skipped, the partial reply is kept, and the chat continues normally.
+
 **Exports.** Query results offer a CSV of the rows returned; each table in the *Database* tab has *Download CSV* for the whole
 table (streamed, UTF-8 with BOM, formula-looking text neutralised).
 
@@ -66,13 +77,13 @@ new one by defining another variable block and an `<option>`.
 ## Security notes (read before approving tools)
 - The lint is **not a sandbox**. Approved tools run in-process, so read the source before approving.
   The Approvals panel shows detected capabilities (`network`, `database-write`, ...).
-- Generated tools only get `ctx.db` and `ctx.http`. `ctx.http` blocks loopback/private addresses (a DNS-rebinding gap remains).
+- Generated tools only get `ctx.db` and `ctx.http`. `ctx.http` blocks loopback/private addresses; the host is resolved once and the connection is pinned to the checked IP (TLS still verifies the hostname), so DNS rebinding cannot swap it.
 - The server binds to 127.0.0.1 and all state-changing requests need a per-process token embedded in the served page.
 
 ## Known limits
-- No schema migrations on existing models (define a new model and copy rows); no foreign keys/composite keys/min-max constraints yet.
+- No composite keys or min/max constraints yet. Model changes go through `alter_model` / `convert_column` (see *Schema changes*).
 - Tables are read-only to the agent until adopted. Tables whose columns are all TEXT (e.g. sqlite `.import`) stay string-typed
-  after adoption (the agent is told to CAST in queries); there is no type-conversion tool yet.
+  after adoption until you ask for `convert_column`.
 - `references` on adopted tables are logical metadata (SQLite cannot add foreign keys to an existing table); on tables made by
   `define_model` they are real, enforced foreign keys.
 - `find_relationships` scans every table pair and is capped at 2000 comparisons, so it is meant for small/medium local databases.
@@ -83,3 +94,11 @@ new one by defining another variable block and an `<option>`.
 - Replies stream token by token (`stream()` in each provider; providers that only implement `generate()` fall back to one chunk).
   Only the final text is saved. Claude and Gemini streaming is covered by tests with faked clients, not by live API calls.
 - Small local models may need several tries to write a valid tool; lint errors are fed back to them.
+
+## Customising the UI (`ui.json`)
+
+Copy `ui.example.json` to `ui.json` (or point `OPENJANUS_UI_CONFIG` at another file). The page picks up edits within ~3 seconds.
+All keys are optional: `theme` (dark/light/hacker), `colors` (bg, panel, line, text, muted, accent, ok, bad, warn, code_bg, user_bg,
+on_accent), `fonts` (body, mono, size), `radius`, `topbar` (visible, title, show = list of items, in display order),
+`chat.placeholder`, `sidebar` (position, width, tabs, default_tab). Invalid values are ignored and listed in a banner under the top
+bar. The Approvals tab can't be hidden.

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import inspect
 import typing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from pydantic import BaseModel
@@ -47,6 +47,7 @@ class Tool:
     params: type[BaseModel]
     fn: Callable[[Any, Any], Any]
     origin: str  # "builtin" | "generated"
+    secrets: dict[str, list[str]] = field(default_factory=dict)  # generated tools: env var name -> hosts it may be sent to
 
     def schema(self) -> dict[str, Any]:
         return self.params.model_json_schema()

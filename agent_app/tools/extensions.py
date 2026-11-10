@@ -31,7 +31,11 @@ def propose_tool(params: ProposeToolParams, ctx: AgentContext) -> Any:
         r = ctx.extensions.propose_tool(params.name, params.description, params.code, params.rationale)
     except ProposalError as e:
         raise ValueError(str(e)) from e
-    return {**r, "note": "Saved as pending. Tell the user to review and approve it; you cannot call it until then."}
+    note = ("Saved as pending. Tell the user to review and approve it; you cannot call it until then.")
+    if r.get("replaces_approved"):
+        note += (" It REPLACES the currently approved tool of the same name: that version keeps working until the user approves this "
+                 "one, which then takes over (the old one is archived).")
+    return {**r, "note": note}
 
 
 class ProposeSkillParams(BaseModel):
@@ -49,7 +53,8 @@ def propose_skill(params: ProposeSkillParams, ctx: AgentContext) -> Any:
         r = ctx.extensions.propose_skill(params.name, params.description, params.instructions, params.tools)
     except ProposalError as e:
         raise ValueError(str(e)) from e
-    return {**r, "note": "Saved as pending. It becomes available only after the user approves it."}
+    return {**r, "note": "Saved as pending. It becomes available only after the user approves it."
+            + (" It REPLACES the approved skill of the same name; the old one keeps working until then." if r.get("replaces_approved") else "")}
 
 
 class LoadSkillParams(BaseModel):

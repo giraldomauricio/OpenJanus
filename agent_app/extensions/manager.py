@@ -21,7 +21,7 @@ from typing import Any, Callable, Literal
 from .lint import TOOL_NAME, lint_skill, lint_tool_source
 
 Kind = Literal["tool", "skill"]
-Status = Literal["pending", "approved", "rejected"]
+Status = Literal["pending", "approved", "rejected", "retired"]
 
 TOOL_TEMPLATE = '''"""Generated tool: {name}
 
@@ -61,7 +61,7 @@ class ExtensionManager:
         self._lock = threading.RLock()
         self._reserved_tools = reserved_tool_names
         self._reserved_skills = reserved_skill_names
-        for st in ("pending", "approved", "rejected"):
+        for st in ("pending", "approved", "rejected", "retired"):
             for k in ("tools", "skills"):
                 (self.root / st / k).mkdir(parents=True, exist_ok=True)
 
@@ -95,8 +95,7 @@ class ExtensionManager:
                 raise ProposalError(f"'{name}' is a built-in tool name")
             if not 10 <= len(description) <= 400:
                 raise ProposalError("Description must be 10-400 chars")
-            if self._exists_anywhere("tool", name, ("approved",)):
-                raise ProposalError(f"A tool named '{name}' is already approved; choose a different name")
+            replaces_approved = self._exists_anywhere("tool", name, ("approved",)) is not None  # shown to the reviewer; approving swaps it in
             source = TOOL_TEMPLATE.format(name=name, description=description, rationale=rationale.replace('"""', "'''"),
                                           code=code.strip("\n"))
             lint = lint_tool_source(source)
@@ -107,14 +106,14 @@ class ExtensionManager:
             path.write_text(source)
             self._write_meta("tool", name, "pending", description, rationale, lint.capabilities)
             return {"status": "pending_approval", "kind": "tool", "name": name, "replaced_pending": replaced,
-                    "capabilities": lint.capabilities}
+                    "replaces_approved": replaces_approved, "capabilities": lint.capabilities}
 
     def propose_skill(self, name: str, description: str, instructions: str, tools: list[str]) -> dict[str, Any]:
         with self._lock:
             lint = lint_skill(name, description, instructions)
             if not lint.ok:
                 raise ProposalError("Skill rejected by lint: " + " | ".join(lint.errors))
-            if name in self._reserved_skills() or self._exists_anywhere("skill", name, ("approved",)):
+            if name in self._reserved_skills():
                 raise ProposalError(f"A skill named '{name}' already exists; choose a different name")
             if instructions.lstrip().startswith("---"):
                 raise ProposalError("Instructions must not start with '---' (frontmatter is added for you)")
@@ -127,6 +126,7 @@ class ExtensionManager:
                 i["name"] for i in self.list_items("pending") if i["kind"] == "tool"}
             unknown = [t for t in tools if t not in known]
             return {"status": "pending_approval", "kind": "skill", "name": name,
+                    "replaces_approved": self._exists_anywhere("skill", name, ("approved",)) is not None,
                     "warning": f"References unknown tools: {unknown}" if unknown else None}
 
     def _write_meta(self, kind: Kind, name: str, status: Status, description: str, rationale: str,
@@ -147,7 +147,10 @@ class ExtensionManager:
             for n in names:
                 mp = self._meta(kind, n, status)  # type: ignore[arg-type]
                 meta = json.loads(mp.read_text()) if mp.exists() else {}
-                items.append({"kind": kind, "name": n, "status": status, **meta})
+                item = {"kind": kind, "name": n, "status": status, **meta}
+                if status == "pending":
+                    item["replaces_approved"] = self._content(kind, n, "approved").exists()  # type: ignore[arg-type]
+                items.append(item)
         return items
 
     def get_source(self, kind: Kind, name: str, status: Status) -> str:
@@ -155,6 +158,28 @@ class ExtensionManager:
         if not p.exists():
             raise KeyError(f"No {status} {kind} named {name}")
         return p.read_text()
+
+    def _archive_approved(self, kind: Kind, name: str, stamp: str) -> Path:
+        """Move an approved item (and its metadata) to retired/, keeping it for the record. Returns where the content went."""
+        dest_dir = self.root / "retired" / f"{kind}s"
+        if kind == "tool":
+            dest = dest_dir / f"{name}.{stamp}.py"
+            shutil.move(self._content("tool", name, "approved"), dest)
+            if self._meta("tool", name, "approved").exists():
+                shutil.move(self._meta("tool", name, "approved"), dest_dir / f"{name}.{stamp}.json")
+        else:
+            dest = dest_dir / f"{name}.{stamp}"
+            shutil.move(self._content("skill", name, "approved").parent, dest)
+        return dest
+
+    def _restore_archived(self, kind: Kind, name: str, dest: Path) -> None:
+        if kind == "tool":
+            shutil.move(dest, self._content("tool", name, "approved"))
+            meta = dest.with_suffix(".json")
+            if meta.exists():
+                shutil.move(meta, self._meta("tool", name, "approved"))
+        else:
+            shutil.move(dest, self._content("skill", name, "approved").parent)
 
     def approve(self, kind: Kind, name: str) -> dict[str, Any]:
         with self._lock:
@@ -165,18 +190,36 @@ class ExtensionManager:
                 lint = lint_tool_source(src.read_text())
                 if not lint.ok:
                     raise ProposalError("Lint failed: " + " | ".join(lint.errors))
-                if self._exists_anywhere("tool", name, ("approved",)):
-                    raise ProposalError("A tool with this name is already approved")
-                shutil.move(src, self._content("tool", name, "approved"))
-                shutil.move(self._meta("tool", name, "pending"), self._meta("tool", name, "approved"))
-            else:
-                if self._exists_anywhere("skill", name, ("approved",)):
-                    raise ProposalError("A skill with this name is already approved")
-                shutil.move(src.parent, self._content("skill", name, "approved").parent)
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+            old: Path | None = None
+            replaced = self._exists_anywhere(kind, name, ("approved",)) is not None
+            if replaced:  # the new version takes over; the old one is kept in retired/
+                old = self._archive_approved(kind, name, stamp)
+            try:
+                if kind == "tool":
+                    shutil.move(src, self._content("tool", name, "approved"))
+                    shutil.move(self._meta("tool", name, "pending"), self._meta("tool", name, "approved"))
+                else:
+                    shutil.move(src.parent, self._content("skill", name, "approved").parent)
+                m = self._manifest()
+                m[kind][name] = _sha(self._content(kind, name, "approved"))
+                self._manifest_path().write_text(json.dumps(m, indent=2))
+            except Exception:
+                if old is not None:  # never leave the user without the version that was working
+                    self._restore_archived(kind, name, old)
+                raise
+            return {"approved": name, "kind": kind, "replaced": replaced}
+
+    def retire(self, kind: Kind, name: str) -> dict[str, Any]:
+        """Take an APPROVED tool/skill out of use. It is archived under retired/, never deleted."""
+        with self._lock:
+            if not self._content(kind, name, "approved").exists():
+                raise KeyError(f"No approved {kind} named {name}")
             m = self._manifest()
-            m[kind][name] = _sha(self._content(kind, name, "approved"))
-            self._manifest_path().write_text(json.dumps(m, indent=2))
-            return {"approved": name, "kind": kind}
+            m[kind].pop(name, None)
+            self._manifest_path().write_text(json.dumps(m, indent=2))  # unlisted first: from here on it is no longer loaded
+            self._archive_approved(kind, name, datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S"))
+            return {"retired": name, "kind": kind}
 
     def reject(self, kind: Kind, name: str) -> dict[str, Any]:
         with self._lock:

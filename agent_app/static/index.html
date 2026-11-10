@@ -10,7 +10,7 @@
   /* Themes are just variable sets. "dark" (default) is :root; the others override it via <html data-theme="...">. */
   :root { --bg:#14161a; --panel:#1c1f26; --line:#2b303b; --text:#e6e8ec; --muted:#8b93a3; --accent:#7aa2ff;
           --ok:#4ade80; --bad:#f87171; --warn:#fbbf24;
-          --code-bg:var(--code-bg); --user-bg:var(--user-bg); --on-accent:#0b1020; --on-warn:#000; --radius:10px; --radius-sm:6px; --pill:99px;
+          --code-bg:#0f1115; --user-bg:#243049; --on-accent:#0b1020; --on-warn:#000; --radius:10px; --radius-sm:6px; --pill:99px;
           --font:-apple-system, system-ui, sans-serif; --mono:ui-monospace, SFMono-Regular, Menlo, monospace;
           --glow:none; --card-shadow:none; --logo-filter:invert(1); --s1:var(--accent); --s2:var(--ok); --s3:var(--warn); --s4:var(--bad); color-scheme:dark; }
   :root[data-theme="light"] { --bg:#fbf8f3; --panel:#f1ece4; --line:#ded5c8; --text:#4a4458; --muted:#746c82; --accent:#8e9bef;
@@ -25,6 +25,7 @@
          font:14px/1.5 var(--font); }
   header { display:flex; gap:10px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--panel); }
   header h1 { font-size:15px; margin:0 auto 0 0; }
+  header h1 small { font-size:11px; font-weight:400; color:var(--muted); margin-left:8px; }
   select, input, button, textarea { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:var(--radius-sm);
          padding:6px 10px; font:inherit; }
   select:focus, input:focus, textarea:focus, button:focus-visible { outline:none; border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
@@ -121,6 +122,17 @@
   #welcome h2 { margin:0 0 4px; color:var(--text); font-size:20px; } #welcome p { margin:4px 0 14px; }
   #welcome .chips { display:flex; flex-direction:column; gap:8px; } #welcome .chips button { text-align:left; color:var(--text); }
   body { text-shadow:var(--glow); }
+  dialog#jsonDlg { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:var(--radius); padding:18px 20px; width:min(640px, 92vw); }
+  dialog#jsonDlg::backdrop { background:rgba(0,0,0,.55); } dialog#jsonDlg h3 { margin:0 0 6px; text-transform:none; letter-spacing:0; font-size:16px; color:var(--text); }
+  dialog#jsonDlg label { display:block; margin:10px 0 0; font-size:12px; color:var(--muted); } dialog#jsonDlg input, dialog#jsonDlg select { width:100%; margin-top:3px; }
+  dialog#jsonDlg .hint { font-size:12px; color:var(--muted); margin:4px 0 0; } #jInfo { margin-top:10px; font-size:12px; } #jInfo .tblwrap { max-height:180px; }
+  #jProg { width:100%; margin-top:12px; accent-color:var(--accent); } #jStatus { font-size:12px; margin-top:6px; min-height:1.4em; } #jStatus.err { color:var(--bad); }
+  #attachments { display:none; flex-wrap:wrap; gap:8px; padding:8px 16px 0; } #attachments.on { display:flex; }
+  .thumb { position:relative; } .thumb img { height:56px; max-width:120px; object-fit:cover; border:1px solid var(--line); border-radius:var(--radius-sm); display:block; }
+  .thumb button { position:absolute; top:-6px; right:-6px; width:18px; height:18px; padding:0; line-height:1; font-size:12px; border-radius:50%; }
+  .msg .imgs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:6px; } .msg .imgs img { max-height:120px; max-width:200px; border-radius:var(--radius-sm); border:1px solid var(--line); cursor:zoom-in; }
+  #attach { padding:6px 10px; }
+  #uiwarn { display:none; padding:6px 16px; font-size:12px; color:var(--warn); border-bottom:1px solid var(--warn); white-space:pre-wrap; }
   /* hacker: terminal look. Prompts replace bubbles; a faint scanline layer sits over everything but ignores the mouse. */
   [data-theme="hacker"] body::after { content:""; position:fixed; inset:0; pointer-events:none; z-index:9;
          background:repeating-linear-gradient(0deg, rgba(0,0,0,.18) 0, rgba(0,0,0,.18) 1px, transparent 1px, transparent 3px); }
@@ -144,21 +156,25 @@
 <body>
 <header>
   <img class="logo" src="/logo.png" alt="" width="30" height="30">
-  <h1>OpenJanus</h1>
+  <h1><span id="ttl">OpenJanus</span><small id="ver" hidden></small></h1>
   <select id="provider"></select>
   <input id="model" list="models" placeholder="model" size="22">
   <datalist id="models"></datalist>
   <select id="theme" title="Theme"><option value="dark">◐ Dark</option><option value="light">☀ Pastel light</option><option value="hacker">▮ Hacker</option></select>
   <select id="history" title="Previous chats"></select>
-  <button id="import">Import CSV…</button>
-  <input type="file" id="file" accept=".csv,text/csv" hidden>
+  <button id="import" title="Import a CSV file as a table">Import CSV…</button>
+  <input type="file" id="file" accept=".csv,text/csv,.drawio,.xml" hidden>
   <button id="new">New chat</button>
+  <button id="rename" title="Rename this chat" disabled>✎</button>
   <button id="del" class="danger" title="Delete this chat" disabled>🗑</button>
 </header>
+<div id="uiwarn" title="Problems found in ui.json"></div>
 <main>
   <section id="chat">
     <div id="log"></div>
+    <div id="attachments"></div>
     <form id="form">
+      <button type="button" id="attach" title="Attach an image (or paste one)" hidden>📎</button><input type="file" id="imgfile" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
       <textarea id="input" placeholder="Ask about your data, or ask for a new tool…" autofocus></textarea>
       <button class="primary" id="send">Send</button>
     </form>
@@ -174,6 +190,22 @@
     <div class="pane" id="database"></div>
   </aside>
 </main>
+<dialog id="jsonDlg">
+  <h3>Import a large file (CSV or JSON)</h3>
+  <p class="hint">Reads the file straight from this computer (nothing is uploaded), so files of hundreds of MB are fine.
+    <b>CSV / TSV</b> (UTF-8, header row; comma, semicolon, tab or pipe separated) or <b>JSON</b>: an array of objects, JSON Lines, or an object holding such an array.
+    JSON nested objects become <code>parent_child</code> columns and lists are kept as JSON text.</p>
+  <label>Full path of the file<input id="jPath" placeholder="/Users/you/data/findings.csv or .json" autocomplete="off" spellcheck="false"></label>
+  <label>Table name<input id="jTable" placeholder="cxone_findings" autocomplete="off" spellcheck="false"></label>
+  <label>If the table already exists<select id="jMode">
+    <option value="new">Create a new table (stop if the name is taken)</option>
+    <option value="append">Append the rows to it</option>
+    <option value="replace">Replace its rows with the file's</option></select></label>
+  <p class="hint" id="jModeHint"></p>
+  <div id="jInfo"></div><progress id="jProg" max="100" value="0" hidden></progress><div id="jStatus"></div>
+  <div class="row"><button type="button" id="jPreview">Preview</button><button type="button" class="primary" id="jGo">Import</button>
+    <button type="button" id="jClose" style="margin-left:auto">Close</button></div>
+</dialog>
 <script>
 const TOKEN = "__TOKEN__";
 const $ = s => document.querySelector(s);
@@ -272,9 +304,61 @@ async function api(path, opts = {}) {
 $("#theme").value = document.documentElement.dataset.theme;
 $("#theme").onchange = () => { document.documentElement.dataset.theme = localStorage.theme = $("#theme").value; };
 
+// ---- optional UI customisation from ui.json (served sanitised by /api/ui-config) --------------------------------
+const TOP = { logo:"header .logo", title:"header h1", provider:"#provider", model:"#model", theme:"#theme",
+              history:"#history", import:"#import", new:"#new", rename:"#rename", delete:"#del" };
+const COLOR_VARS = { bg:"--bg", panel:"--panel", line:"--line", text:"--text", muted:"--muted", accent:"--accent", ok:"--ok",
+                     bad:"--bad", warn:"--warn", code_bg:"--code-bg", user_bg:"--user-bg", on_accent:"--on-accent" };
+const DEFAULT_PLACEHOLDER = $("#input").placeholder, DEFAULT_TITLE = $("#ttl").textContent;
+let uiSeen = null;
+function applyUi(res) {
+  const key = JSON.stringify(res);
+  if (key === uiSeen) return;
+  const first = uiSeen === null; uiSeen = key;
+  const c = res.config || {}, root = document.documentElement.style;
+  // reset everything this function can touch, so removing a key from ui.json restores the default
+  for (const v of [...Object.values(COLOR_VARS), "--font", "--mono", "--radius", "--radius-sm"]) root.removeProperty(v);
+  root.fontSize = "";
+  if (c.theme && (!first || !localStorage.theme)) { document.documentElement.dataset.theme = c.theme; $("#theme").value = c.theme; }
+  for (const [k, v] of Object.entries(c.colors || {})) root.setProperty(COLOR_VARS[k], v);
+  if (c.fonts?.body) root.setProperty("--font", c.fonts.body);
+  if (c.fonts?.mono) root.setProperty("--mono", c.fonts.mono);
+  if (c.fonts?.size) document.body.style.fontSize = c.fonts.size + "px"; else document.body.style.fontSize = "";
+  if (c.radius !== undefined) { root.setProperty("--radius", c.radius + "px"); root.setProperty("--radius-sm", Math.round(c.radius * .6) + "px"); }
+  const top = c.topbar || {}, show = top.show;
+  $("header").style.display = top.visible === false ? "none" : "";
+  $("#ttl").textContent = top.title || DEFAULT_TITLE;
+  for (const [name, sel] of Object.entries(TOP)) {
+    const e = $(sel), i = show ? show.indexOf(name) : -1;
+    e.style.display = show && i < 0 ? "none" : ""; e.style.order = i >= 0 ? i : "";
+  }
+  $("#input").placeholder = c.chat?.placeholder ?? DEFAULT_PLACEHOLDER;
+  const sb = c.sidebar || {}, tabs = sb.tabs || ["approvals", "capabilities", "database"], aside = $("aside");
+  aside.style.width = sb.width ? sb.width + "px" : "";
+  aside.style.order = sb.position === "left" ? -1 : "";
+  aside.style.borderLeft = sb.position === "left" ? "0" : ""; aside.style.borderRight = sb.position === "left" ? "1px solid var(--line)" : "";
+  document.querySelectorAll(".tabs button").forEach(b => {
+    const i = tabs.indexOf(b.dataset.tab); b.style.display = i < 0 ? "none" : ""; b.style.order = i;
+  });
+  const active = document.querySelector(".tabs button.on");
+  if (sb.default_tab) document.querySelector(`[data-tab="${sb.default_tab}"]`).click();
+  else if (active && active.style.display === "none") document.querySelector('[data-tab="approvals"]').click();
+  const warn = $("#uiwarn"); warn.textContent = res.warnings?.length ? "ui.json: " + res.warnings.join("\n") : "";
+  warn.style.display = res.warnings?.length ? "block" : "none";
+}
+async function pollUi() {
+  try { applyUi(await (await fetch("/api/ui-config", { cache: "no-store" })).json()); } catch (e) { /* server restarting: keep current look */ }
+}
+pollUi(); setInterval(pollUi, 3000);  // live reload: edit ui.json and the page follows within a few seconds
+
 async function init() {
   if (sessionStorage.draft) { $("#input").value = sessionStorage.draft; delete sessionStorage.draft; }
   cfg = await (await api("/api/config")).json();
+  if (cfg.version) { $("#ver").textContent = "v" + cfg.version; $("#ver").title = "OpenJanus version " + cfg.version; $("#ver").hidden = false; }
+  if (cfg.features?.diagrams) {  // optional diagrams feature: the same Import button also takes .drawio files
+    $("#import").textContent = "Import…"; $("#import").title = "Import a CSV file (as a table) or a draw.io diagram";
+  } else $("#file").accept = ".csv,text/csv";
+  $("#attach").hidden = !cfg.features?.images;
   const sel = $("#provider");
   for (const [name, info] of Object.entries(cfg.providers)) {
     const o = el("option", "", name + (info.configured ? "" : " (no API key)")); o.value = name; sel.append(o);
@@ -318,8 +402,18 @@ async function refreshHistory() {
       + new Date(x.updated * 1000).toLocaleString());
     o.value = x.id; sel.append(o);
   }
-  sel.value = ""; $("#del").disabled = busy || !list.some(x => x.id === sessionId);
+  sel.value = ""; $("#del").disabled = $("#rename").disabled = busy || !list.some(x => x.id === sessionId);
+  currentTitle = list.find(x => x.id === sessionId)?.title || "";
 }
+let currentTitle = "";
+$("#rename").onclick = async () => {
+  if (busy) return;
+  const t = prompt("Rename this chat:", currentTitle);
+  if (t === null || !t.trim() || t.trim() === currentTitle) return;
+  try { await api("/api/sessions/" + sessionId, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: t }) }); }
+  catch (e) { alert("Could not rename: " + e.message); return; }
+  await refreshHistory();
+};
 $("#del").onclick = async () => {
   if (busy || !confirm("Delete this chat permanently? This cannot be undone.")) return;
   try { await api("/api/sessions/" + sessionId, { method: "DELETE" }); } catch (e) { alert("Could not delete: " + e.message); return; }
@@ -330,8 +424,22 @@ $("#del").onclick = async () => {
 
 function prefill(text) { $("#input").value = text; $("#input").focus(); }
 $("#import").onclick = () => $("#file").click();
+async function importDiagram(f) {  // optional diagrams feature: store the file, then let the agent read it
+  const base = f.name.replace(/\.(drawio|xml)$/i, "").replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[._-]+/, "") || "diagram";
+  try {
+    const r = await (await api("/api/diagrams?name=" + encodeURIComponent(base + ".drawio"),
+      { method: "POST", body: await f.text(), headers: { "Content-Type": "application/xml" } })).json();
+    add(el("div", "msg assistant", `Uploaded diagram "${r.file}" (${r.nodes} shapes, ${r.edges} connectors).`));
+    prefill(`I uploaded a draw.io diagram called ${r.file}. Read it and describe the architecture.`);
+  } catch (e) { alert("Diagram upload failed: " + e.message); }
+}
 $("#file").onchange = async () => {
   const f = $("#file").files[0]; if (!f) return;
+  if (f.size > 20e6 && /\.(csv|tsv)$/i.test(f.name)) {  // too big for the browser upload: use the path-based import instead
+    $("#file").value = ""; alert(`"${f.name}" is ${(f.size / 1048576).toFixed(0)} MB: too big to upload through the browser (20 MB max).\n\nUse the Database tab → "Import file from disk…" and type the file's full path instead.`);
+    document.querySelector('[data-tab="database"]').click(); openJsonDialog(); return;
+  }
+  if (/\.(drawio|xml)$/i.test(f.name)) { $("#file").value = ""; return importDiagram(f); }
   const suggested = f.name.replace(/\.csv$/i, "").replace(/[^A-Za-z0-9]+/g, "_");
   const name = prompt("Table name for this CSV:", suggested); $("#file").value = "";
   if (!name) return;
@@ -349,14 +457,22 @@ function showWelcome() {
   const img = el("img", "logo"); img.src = "/logo.png"; img.alt = "OpenJanus";
   w.append(img, el("h2", "", "OpenJanus"), el("p", "", "Work with your local database, and let the agent propose its own tools and skills."));
   const chips = el("div", "chips");
-  for (const t of ["What can you do? List your tools and skills.", "What tables are in my database?",
-                   "Review your tools and skills for overlap, then review my database."]) {
+  const ideas = ["What can you do? List your tools and skills.", "What tables are in my database?",
+                 "Review your tools and skills for overlap, then review my database."];
+  if (cfg?.features?.diagrams) ideas.push("Create a draw.io architecture diagram from a STRIDE threat model I describe.");
+  for (const t of ideas) {
     const b = el("button", "", t); b.type = "button"; b.onclick = () => prefill(t); chips.append(b);
   }
   w.append(chips); $("#log").append(w);
 }
-function userNode(text, provider, model) {
-  const d = el("div", "msg user"); d.append(document.createTextNode(text));
+function userNode(text, provider, model, imgs) {
+  const d = el("div", "msg user");
+  if (imgs?.length) {
+    const box = el("div", "imgs");
+    for (const id of imgs) { const i = el("img"); i.src = "/api/images/" + id; i.alt = "attached image"; i.onclick = () => window.open(i.src, "_blank", "noopener"); box.append(i); }
+    d.append(box);
+  }
+  d.append(document.createTextNode(text));
   if (provider) d.append(el("span", "who", model ? `${provider} · ${model}` : provider));
   return d;
 }
@@ -408,14 +524,15 @@ $("#send").addEventListener("click", e => { if (busy) { e.preventDefault(); stop
 document.addEventListener("keydown", e => { if (e.key === "Escape" && busy) stopRun(); });
 
 async function send(text) {
-  busy = true; stopping = false; setSendMode("stop"); $("#del").disabled = true;
-  add(userNode(text, $("#provider").value, $("#model").value.trim()));
+  const imgs = attached.map(a => a.id); clearAttachments();
+  busy = true; stopping = false; setSendMode("stop"); $("#del").disabled = $("#rename").disabled = true;
+  add(userNode(text, $("#provider").value, $("#model").value.trim(), imgs));
   pendingDraft = text;
   const tools = {}, model = $("#model").value.trim() || $("#provider").value;
   showWorking(`Waiting for ${model}…`);
   try {
     const r = await api("/api/chat", { method: "POST", body: JSON.stringify({
-      session_id: sessionId, message: text, provider: $("#provider").value, model: $("#model").value.trim() || null }) });
+      session_id: sessionId, message: text, images: imgs, provider: $("#provider").value, model: $("#model").value.trim() || null }) });
     const reader = r.body.getReader(), dec = new TextDecoder(); let buf = "";
     while (true) {
       const { done, value } = await reader.read(); if (done) break;
@@ -599,7 +716,7 @@ function finishStream(finalText) {
 }
 
 function handle(ev, tools) {
-  if (ev.type === "user") add(userNode(ev.text, ev.provider, ev.model));
+  if (ev.type === "user") add(userNode(ev.text, ev.provider, ev.model, ev.images));
   else if (ev.type === "cancelled") { finishStream(); add(el("div", "msg warning", "■ Stopped. You can continue the conversation.")); }
   else if (ev.type === "text_delta") streamDelta(ev.text)
   else if (ev.type === "text") { finishStream(ev.text); setWorking(`Waiting for ${$("#model").value.trim() || $("#provider").value}…`); }
@@ -613,12 +730,57 @@ function handle(ev, tools) {
     d.querySelector("summary").textContent = (ev.ok ? "✓ " : "✗ ") + ev.name;
     d.append(el("pre", "", ev.content));
     if (ev.name.startsWith("propose_") && ev.ok) { refreshApprovals(); refreshCaps(); }
+    if (ev.download) {  // e.g. a generated draw.io file
+      const a = el("a", "btnlink", "⬇ Download " + ev.download.name); a.href = ev.download.url; a.download = ev.download.name; add(a);
+    }
     if (ev.table && ev.table.rows.length >= 2) add(resultCard(ev.table));  // a single row/value does not need a table, CSV or chart
   }
 }
 
-$("#form").onsubmit = e => { e.preventDefault(); const t = $("#input").value.trim(); if (!t || busy) return; $("#input").value = ""; send(t); };
+$("#form").onsubmit = e => { e.preventDefault(); let t = $("#input").value.trim();
+  if (!t && attached.length) t = "Here is an architecture image. List the components, data flows and trust boundaries you can see, and mark anything you are unsure about.";
+  if (!t || busy || uploading) return; $("#input").value = ""; send(t); };
 $("#input").onkeydown = e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#form").requestSubmit(); } };
+
+// ---- image attachments (optional feature) --------------------------------------------------------------------
+const attached = []; let uploading = 0;
+function clearAttachments() { attached.length = 0; drawAttachments(); }
+function drawAttachments() {
+  const box = $("#attachments"); box.replaceChildren(); box.classList.toggle("on", attached.length > 0);
+  attached.forEach((a, i) => {
+    const t = el("div", "thumb"), img = el("img"), x = el("button", "", "×"); img.src = a.url; x.type = "button"; x.title = "Remove";
+    x.onclick = () => { attached.splice(i, 1); drawAttachments(); }; t.append(img, x); box.append(t);
+  });
+}
+// Big screenshots are scaled down in the browser: they fit the providers' size limits and cost fewer tokens. Small ones go as they are.
+async function prepareImage(file) {
+  if (file.size <= 3e6) { const bm = await createImageBitmap(file).catch(() => null); if (!bm || Math.max(bm.width, bm.height) <= 2400) return file; }
+  const bm = await createImageBitmap(file), k = Math.min(1, 2400 / Math.max(bm.width, bm.height));
+  const c = document.createElement("canvas"); c.width = Math.round(bm.width * k); c.height = Math.round(bm.height * k);
+  c.getContext("2d").drawImage(bm, 0, 0, c.width, c.height);
+  let blob = await new Promise(r => c.toBlob(r, "image/png"));
+  if (blob.size > 4e6) blob = await new Promise(r => c.toBlob(r, "image/jpeg", .9));
+  return blob;
+}
+async function attachImages(files) {
+  for (const f of files) {
+    if (!f.type.startsWith("image/")) continue;
+    if (attached.length >= 4) { alert("At most 4 images per message."); break; }
+    uploading++; if (!busy) $("#send").disabled = true;
+    try {
+      const blob = await prepareImage(f);
+      const r = await (await api("/api/images", { method: "POST", body: blob, headers: { "Content-Type": blob.type || "application/octet-stream" } })).json();
+      attached.push({ id: r.id, url: "/api/images/" + r.id }); drawAttachments();
+    } catch (e) { alert("Could not attach image: " + e.message); }
+    finally { uploading--; if (!uploading && !busy) $("#send").disabled = false; }
+  }
+}
+$("#attach").onclick = () => $("#imgfile").click();
+$("#imgfile").onchange = () => { attachImages([...$("#imgfile").files]); $("#imgfile").value = ""; };
+$("#input").addEventListener("paste", e => {
+  const files = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith("image/"));
+  if (files.length && !$("#attach").hidden) { e.preventDefault(); attachImages(files); }
+});
 
 // ---- sidebar -------------------------------------------------------------
 document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
@@ -641,6 +803,75 @@ function collapsible(key, summaryNodes, bodyNodes, onOpen) {
   if (d.open) open();
   return d;
 }
+// ---- import a (possibly huge) JSON file from a path on this computer ---------------------------------------------
+function jsonButton() {
+  const b = el("button", "", "Import file from disk…"); b.title = "Load a large CSV or JSON file into a table (read from its path, no upload)"; b.onclick = openJsonDialog; return b;
+}
+let jsonJob = null;
+const fmtMB = n => (n / 1048576).toFixed(n > 1e8 ? 0 : 1) + " MB";
+function jsonStatus(msg, err) { const s = $("#jStatus"); s.textContent = msg; s.classList.toggle("err", !!err); }
+function jsonBusy(on) { for (const id of ["#jPath", "#jTable", "#jMode", "#jPreview", "#jGo"]) $(id).disabled = on; $("#jClose").textContent = on ? "Cancel import" : "Close"; }
+function openJsonDialog() {
+  jsonJob = null; jsonBusy(false); $("#jInfo").replaceChildren(); $("#jProg").hidden = true; jsonStatus("");
+  const d = $("#jsonDlg"); if (!d.open) d.showModal(); $("#jPath").focus(); updateModeHint();
+}
+function updateModeHint() {
+  $("#jModeHint").textContent = { new: "", append: "Adds the rows to the existing table. Nothing de-duplicates: importing the same file twice doubles the rows. The file's columns must already exist in the table.",
+    replace: "Deletes ALL current rows of that table, then loads the file, in one step: if anything fails the table stays exactly as it was. The file's columns must already exist in the table." }[$("#jMode").value];
+}
+$("#jMode").onchange = updateModeHint;
+function guessTable() {
+  const base = $("#jPath").value.trim().split("/").pop().replace(/\.(csv|tsv|jsonl?|ndjson)$/i, "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  if (base && !$("#jTable").value) $("#jTable").value = base;
+}
+$("#jPath").onblur = guessTable;
+$("#jPreview").onclick = async () => {
+  if (!$("#jPath").value.trim()) return jsonStatus("Enter the full path of the file first.", true);
+  jsonStatus("Reading the first records…"); $("#jInfo").replaceChildren();
+  try {
+    const r = await (await api("/api/import/file/preview", { method: "POST", body: JSON.stringify({ path: $("#jPath").value }) })).json();
+    guessTable(); jsonStatus("");
+    const info = $("#jInfo"), tbl = el("table"), wrap = el("div", "tblwrap");
+    info.append(el("div", "", `${fmtMB(r.size_bytes)} · ${r.columns.length} columns · ` + (r.complete ? `${r.records_scanned} rows` : `first ${r.records_scanned} rows scanned (types are confirmed over the whole file during the import)`)));
+    const head = el("tr"); ["column", "type"].forEach(h => head.append(el("th", "", h))); tbl.append(head);
+    r.columns.forEach(c => { const tr = el("tr"); tr.append(el("td", "", c.name), el("td", "", c.type)); tbl.append(tr); });
+    wrap.append(tbl); info.append(wrap);
+  } catch (e) { jsonStatus(e.message, true); }
+};
+$("#jGo").onclick = async () => {
+  const path = $("#jPath").value.trim(), table = $("#jTable").value.trim(), mode = $("#jMode").value;
+  if (!path || !table) return jsonStatus("Enter the file path and a table name.", true);
+  if (mode === "replace" && !confirm(`Replace ALL rows of table "${table}" with the contents of this file?\n\nIf the import fails the table stays as it is.`)) return;
+  jsonStatus("Starting…"); jsonBusy(true); $("#jProg").hidden = false; $("#jProg").value = 0;
+  try {
+    jsonJob = (await (await api("/api/import/file", { method: "POST", body: JSON.stringify({ path, table, mode }) })).json()).job_id;
+  } catch (e) { jsonBusy(false); $("#jProg").hidden = true; return jsonStatus(e.message, true); }
+  const job = jsonJob;
+  while (jsonJob === job) {
+    await new Promise(r => setTimeout(r, 700));
+    let s; try { s = await (await api("/api/import/file/" + job)).json(); } catch (e) { jsonBusy(false); return jsonStatus(e.message, true); }
+    const frac = s.total ? s.bytes_read / s.total : 0, n = s.rows.toLocaleString();
+    if (s.phase === "scan" || s.phase === "load") {
+      $("#jProg").value = (s.phase === "scan" ? frac * 50 : 50 + frac * 50);
+      jsonStatus(s.phase === "scan" ? `Step 1 of 2: reading the file and working out column types… ${n} rows` : `Step 2 of 2: loading… ${n} rows (${Math.round(frac * 100)}% of the file)`);
+      continue;
+    }
+    jsonJob = null; jsonBusy(false); $("#jProg").hidden = true;
+    if (s.phase === "error") return jsonStatus(s.error, true);
+    if (s.phase === "cancelled") return jsonStatus("Import cancelled. Nothing was changed.");
+    const r = s.result; $("#jsonDlg").close();
+    add(el("div", "msg assistant", `Imported ${r.rows.toLocaleString()} rows into table "${r.table}"` + (r.mode === "new" ? ` (${r.columns.length} columns).` :
+      r.mode === "append" ? " (appended)." : ` (replaced ${r.replaced_rows.toLocaleString()} previous rows).`)));
+    if (r.mode === "new") prefill(`I imported a table called ${r.table} from a file. Learn it: profile it, adopt it as a model, look for relationships with my other tables, and tell me what you found.`);
+    document.querySelector('[data-tab="database"]').click(); refreshDb();
+  }
+};
+$("#jClose").onclick = async () => {
+  if (jsonJob) { try { await api(`/api/import/file/${jsonJob}/cancel`, { method: "POST" }); jsonStatus("Cancelling…"); } catch (e) { jsonStatus(e.message, true); } return; }
+  $("#jsonDlg").close();
+};
+$("#jsonDlg").addEventListener("cancel", e => { if (jsonJob) e.preventDefault(); });  // Esc must not hide a running import
+
 function toolbar(pane) {
   const bar = el("div", "toolbar"), all = (open) => () => pane.querySelectorAll("details.card").forEach(d => { d.open = open; });
   const a = el("button", "", "Expand all"), b = el("button", "", "Collapse all");
@@ -650,11 +881,12 @@ function toolbar(pane) {
 function itemCard(it, pending) {
   const key = `${it.status}:${it.kind}:${it.name}`;
   const head = [el("h4", "", `${it.kind === "tool" ? "🔧" : "📘"} ${it.name}`)];
-  for (const cap of it.capabilities || []) if (cap === "network" || cap === "database-write") head.push(el("span", "badge " + cap, cap));
+  if (pending && it.replaces_approved) head.push(el("span", "badge pending", "⟳ replaces approved"));
+  for (const cap of it.capabilities || []) if (cap === "network" || cap === "database-write" || cap.startsWith("secret:")) head.push(el("span", "badge " + (cap.startsWith("secret:") ? "network" : cap), cap.startsWith("secret:") ? "🔑 " + cap.slice(7) : cap));
   const body = [el("p", "", it.description || "")];
   if (it.rationale) body.push(el("p", "", "Why: " + it.rationale));
   const caps = el("div");
-  for (const cap of it.capabilities || []) caps.append(el("span", "badge " + cap, cap));
+  for (const cap of it.capabilities || []) caps.append(el("span", "badge " + (cap.startsWith("secret:") ? "network" : cap), cap.startsWith("secret:") ? "🔑 uses secret " + cap.slice(7) : cap));
   if (it.kind === "tool" && !(it.capabilities || []).length) caps.append(el("span", "badge", "no network / no db"));
   body.push(caps);
   const src = el("pre"); src.style.display = "none"; body.push(src);
@@ -667,11 +899,34 @@ function itemCard(it, pending) {
     } else { src.style.display = "none"; view.textContent = "View source"; }
   };
   row.append(view);
+  if (pending && it.replaces_approved) {  // let the reviewer read what is running today next to the proposal
+    const cur = el("pre"); cur.style.display = "none"; body.push(cur);  // shown above the buttons row, which is pushed last
+    const old = el("button", "", "View current version");
+    old.onclick = async () => {
+      if (cur.style.display === "none") {
+        cur.textContent = "// CURRENT APPROVED VERSION\n" + (await (await api(`/api/extensions/${it.kind}/${it.name}/source?status=approved`)).json()).source;
+        cur.style.display = "block"; old.textContent = "Hide current version";
+      } else { cur.style.display = "none"; old.textContent = "View current version"; }
+    };
+    row.append(old);
+  }
+  if (!pending) {
+    const gone = el("button", "danger", "Retire");
+    gone.title = "Take it out of use (it is archived, not deleted)";
+    gone.onclick = async () => {
+      const users = (it.used_by_skills || []).length ? `\n\nSkills that use this tool will stop working: ${it.used_by_skills.join(", ")}.` : "";
+      if (!confirm(`Retire ${it.kind} "${it.name}"?\n\nThe agent can no longer use it. The files are kept in data/extensions/retired.` + users)) return;
+      try { await api(`/api/extensions/${it.kind}/${it.name}/retire`, { method: "POST" }); } catch (e) { alert(e.message); }
+      openKeys.delete(key); refreshApprovals(); refreshCaps();
+    };
+    row.append(gone);
+  }
   if (pending) {
     const ok = el("button", "primary", "Approve"), no = el("button", "danger", "Reject");
     const act = a => async () => {
-      if (a === "approve" && !confirm(`Approve ${it.kind} "${it.name}"?\n\nOnce approved it becomes available to the agent` +
-          (it.kind === "tool" ? " and its code will run on this machine." : "."))) return;
+      if (a === "approve" && !confirm(`Approve ${it.kind} "${it.name}"?\n\n` + (it.replaces_approved
+          ? `This REPLACES the currently approved ${it.kind} of the same name (the old version is archived).\n\n` : "") +
+          `Once approved it becomes available to the agent` + (it.kind === "tool" ? " and its code will run on this machine." : "."))) return;
       try { await api(`/api/extensions/${it.kind}/${it.name}/${a}`, { method: "POST" }); } catch (e) { alert(e.message); }
       openKeys.delete(key); refreshApprovals(); refreshCaps();
     };
@@ -794,8 +1049,8 @@ async function loadPreview(table, out) {
 async function refreshDb() {
   const d = await (await api("/api/db")).json();
   const pane = $("#database"); pane.replaceChildren();
-  if (!d.tables.length) { pane.append(el("p", "", "No tables yet.")); return; }
-  pane.append(toolbar(pane));
+  if (!d.tables.length) { const bar = el("div", "toolbar"); bar.append(jsonButton()); pane.append(bar, el("p", "", "No tables yet.")); return; }
+  const bar = toolbar(pane); bar.prepend(jsonButton()); pane.append(bar);
   for (const t of d.tables) {
     const head = [el("h4", "", t.table), el("span", "badge", `${t.rows} rows`)];
     if (!t.managed) head.push(el("span", "badge database-write", "no model"));

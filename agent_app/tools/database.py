@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from ..db import ModelSpec
+from ..db.migrate import Op
 from ..db.models import FieldType
 from ..sdk import AgentContext, tool
 
@@ -161,3 +162,45 @@ def _annotate(ctx: AgentContext, model: str, description: str | None, field_desc
       "Does not change table data. Use an empty string to clear a value.")
 def annotate_model(params: AnnotateParams, ctx: AgentContext) -> Any:
     return _annotate(ctx, params.model, params.description, params.field_descriptions, params.references)
+
+
+class AlterParams(BaseModel):
+    model: str = Field(description="Name of the model/table to change")
+    ops: list[Op] = Field(min_length=1, description=(
+        "Changes, applied in order. Each has an `op`: "
+        '{"op":"add_field","field":{"name":"note","type":"string","required":false}} | '
+        '{"op":"drop_field","name":"note"} | '
+        '{"op":"rename_field","name":"old","new_name":"new"} | '
+        '{"op":"change_field","name":"qty","required":true,"default":0} (also: type, unique, description, references, '
+        "date_format, on_error)"))
+    apply: bool = Field(False, description="false = DRY RUN: executes the change inside a transaction and rolls it back, so the "
+                                           "report is exact. Set true ONLY after the user has seen the dry run and agreed.")
+
+
+@tool("alter_model",
+      "Change an existing model's schema: add, drop, rename or change fields (type, required, unique, default, references). "
+      "ALWAYS call it first with apply=false (dry run), show the user the plan, problems and any failures, and call with apply=true only "
+      "after they agree (the app refuses apply unless an identical dry run was shown and the user has replied since). A backup is taken automatically on apply. Tables created by define_model are rebuilt when needed; the user's own "
+      "(adopted) tables only support add/rename/drop field and metadata changes. Use convert_column to change a column's type on those.")
+def alter_model(params: AlterParams, ctx: AgentContext) -> Any:
+    return ctx.db.alter_model(params.model, params.ops, params.apply)
+
+
+class ConvertParams(BaseModel):
+    table: str
+    column: str
+    to_type: Literal["integer", "number", "boolean", "date", "datetime", "string"]
+    date_format: str | None = Field(None, description="strptime format for text -> date/datetime when the text is not ISO, "
+                                                      "e.g. '%m/%d/%Y' (US) or '%d/%m/%Y'. NEVER guess day-vs-month order: ask the user.")
+    on_error: Literal["fail", "null"] = Field("fail", description="'fail' (default) reports values that do not parse; 'null' turns "
+                                                                  "them into NULL, which loses data: only with the user's consent")
+    apply: bool = Field(False, description="false = DRY RUN with a before/after sample; true only after the user agreed")
+
+
+@tool("convert_column",
+      "Convert a column's stored values to a real type (integer, number, boolean, date, datetime) for tables whose columns are all TEXT "
+      "(e.g. imported with .import) or any other column. Strict: values that do not parse are listed, never silently zeroed. "
+      "ALWAYS dry-run first (apply=false), show the user the sample and failures, then apply=true after they agree (the app refuses apply "
+      "unless an identical dry run was shown and the user has replied since); a backup is taken automatically. Handles thousands separators (1,234) and dates via date_format. Needs a model (adopt_table first).")
+def convert_column(params: ConvertParams, ctx: AgentContext) -> Any:
+    return ctx.db.convert_column(params.table, params.column, params.to_type, params.date_format, params.on_error, params.apply)

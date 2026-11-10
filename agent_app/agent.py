@@ -20,10 +20,14 @@ from .http_safe import SafeHttp
 from .introspection import build_catalog
 from .tables import as_table
 from .llm import LLMProvider, ToolDef, Turn
+from .tool_secrets import validate_declaration
 from .sdk import BUILTIN_TOOLS, AgentContext, Tool, ToolContext
 from .skills import SkillStore
 from . import tools as _builtin  # noqa: F401  (registers built-in tools)
 
+# Tools whose apply=true is only honoured after an identical dry run AND a user reply since: the confirmation is enforced here,
+# not left to the model's good manners.
+CONFIRM_TOOLS = {"alter_model", "convert_column"}
 STOPPED = "[Stopped by the user.]"
 
 SYSTEM_PROMPT = """You are a data assistant working with a local SQLite database through tools.
@@ -38,6 +42,12 @@ Rules:
 - You can propose new tools and skills, but they are saved as PENDING and are unusable until the user approves them
   in the Approvals panel. After proposing, explain what you created and ask the user to review it. Do not call a
   tool that is not in your tool list, and never say a pending item is available.
+- Tools CAN use API keys and tokens without anyone pasting them into the chat: a tool declares
+  `SECRETS = {{"ENV_VAR_NAME": ["api.host.com"]}}` and puts `{{secret:ENV_VAR_NAME}}` in a request header; the app fills in the value
+  from the server's environment (the .env file) when the request is sent, and only to that host. So NEVER ask the user to paste a secret,
+  NEVER make a key a tool parameter, and never say tools cannot reach environment variables. When a tool needs a secret, load the
+  `extension-builder` skill (it has the exact pattern) and tell the user which variable to set in .env.
+- To change an approved tool or skill, propose it again with the SAME name: the user reviews it as a replacement and approves it.
 - Never create a tool that simulates, mocks or hard-codes data. If a real data source cannot be reached within the
   tool rules, say so instead of proposing a fake tool.
 - If a tool call fails, read the error, fix the input, and retry at most twice before asking the user.
@@ -56,6 +66,7 @@ class Session:
     model: str = ""
     created: float = field(default_factory=time.time)
     updated: float = 0.0
+    dry_runs: dict[str, int] = field(default_factory=dict)  # schema-change dry runs shown in this chat -> user-message count at that time
     cancel: threading.Event = field(default_factory=threading.Event)  # set by the Stop button
     events: list[dict[str, Any]] = field(default_factory=list)  # what the UI displays, replayed when a chat is reopened
 
@@ -66,13 +77,14 @@ def _load_generated(name: str, path: Path) -> Tool:
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
     if not (isinstance(mod.Params, type) and issubclass(mod.Params, BaseModel)):
         raise TypeError("Params must be a Pydantic model")
-    return Tool(mod.NAME, mod.DESCRIPTION, mod.Params, mod.run, "generated")
+    secrets = validate_declaration(mod.SECRETS) if hasattr(mod, "SECRETS") else {}
+    return Tool(mod.NAME, mod.DESCRIPTION, mod.Params, mod.run, "generated", secrets)
 
 
 class Agent:
     def __init__(self, db: Database, extensions: ExtensionManager, skills: SkillStore):
         self.db, self.extensions, self.skills = db, extensions, skills
-        http = SafeHttp()
+        http = self.http = SafeHttp()
         self.tool_ctx = ToolContext(db, http)
         self.agent_ctx = AgentContext(db, http, extensions, skills)
         self._generated_cache: dict[tuple[str, int], Tool] = {}
@@ -113,15 +125,42 @@ class Agent:
     def _execute(self, tools: dict[str, Tool], name: str, args: dict[str, Any]) -> tuple[bool, str]:
         return self._run(tools, name, args)[:2]
 
-    def _run(self, tools: dict[str, Tool], name: str, args: dict[str, Any]) -> tuple[bool, str, Any]:
+    @staticmethod
+    def _confirmation_key(name: str, args: dict[str, Any]) -> str:
+        return name + json.dumps({k: v for k, v in args.items() if k != "apply"}, sort_keys=True, default=str)
+
+    def _gate(self, session: Session | None, name: str, args: dict[str, Any]) -> str | None:
+        """Refusal text if this call would apply a schema change the user has not had the chance to review."""
+        if session is None or name not in CONFIRM_TOOLS or not args.get("apply"):
+            return None
+        seen = session.dry_runs.get(self._confirmation_key(name, args))
+        if seen is None:
+            return ("Not applied: no dry run of exactly this change has been shown in this chat. Call it first with apply=false "
+                    "(same arguments), show the user the result, and wait for their answer.")
+        if sum(1 for m in session.messages if m["role"] == "user") <= seen:
+            return ("Not applied: the user has not replied since the dry run. Present the plan to the user and STOP; "
+                    "apply only after they answer in their next message.")
+        return None
+
+    def _run(self, tools: dict[str, Tool], name: str, args: dict[str, Any],
+             session: Session | None = None) -> tuple[bool, str, Any]:
         """(ok, text for the model, raw result). The raw result lets the UI offer CSV/charts without re-parsing truncated text."""
         t = tools.get(name)
         if t is None:
             return False, f"Unknown tool '{name}'. Available: {sorted(tools)}", None
-        ctx = self.agent_ctx if t.origin == "builtin" else self.tool_ctx
+        if (refusal := self._gate(session, name, args)) is not None:
+            return False, refusal, None
+        ctx = self.agent_ctx if t.origin == "builtin" else (
+            ToolContext(self.db, self.http.scoped(t.secrets)) if t.secrets else self.tool_ctx)
         result = None
         try:
             result = t.call(args, ctx)
+            if session is not None and name in CONFIRM_TOOLS and isinstance(result, dict):
+                key = self._confirmation_key(name, args)
+                if result.get("applied"):
+                    session.dry_runs.pop(key, None)  # a new change needs its own review
+                elif not args.get("apply") and not result.get("problems"):
+                    session.dry_runs[key] = sum(1 for m in session.messages if m["role"] == "user")
             text = json.dumps(result, default=str, ensure_ascii=False)
             ok = True
         except ValidationError as e:
@@ -142,9 +181,10 @@ class Agent:
             yield {"type": "text", "text": partial}
         yield {"type": "cancelled"}
 
-    def run(self, session: Session, user_text: str, provider: LLMProvider) -> Iterator[dict[str, Any]]:
+    def run(self, session: Session, user_text: str, provider: LLMProvider,
+            images: list[str] | None = None) -> Iterator[dict[str, Any]]:
         session.cancel.clear()
-        session.messages.append({"role": "user", "content": user_text})
+        session.messages.append({"role": "user", "content": user_text, **({"images": images} if images else {})})
         tools, problems = self.build_tools()
         for p in problems:
             yield {"type": "warning", "text": p}
@@ -188,12 +228,14 @@ class Agent:
                     results.append({"id": c.id, "name": c.name, "content": "Not run: the user pressed Stop.", "is_error": True})
                     continue
                 yield {"type": "tool_call", "id": c.id, "name": c.name, "args": c.args}
-                ok, content, raw = self._run(tools, c.name, c.args)
+                ok, content, raw = self._run(tools, c.name, c.args, session)
                 results.append({"id": c.id, "name": c.name, "content": content, "is_error": not ok})
                 ev = {"type": "tool_result", "id": c.id, "name": c.name, "ok": ok, "content": content}
                 table = as_table(raw)  # UI-only: lets the chat offer a preview, CSV download and chart
                 if table:
                     ev["table"] = table
+                if isinstance(raw, dict) and isinstance(raw.get("download_url"), str) and raw["download_url"].startswith("/api/diagrams/"):
+                    ev["download"] = {"url": raw["download_url"], "name": raw.get("file", "diagram.drawio")}  # UI-only: link in the chat
                 yield ev
             session.messages.append({"role": "tool", "results": results})
         yield {"type": "error", "text": f"Stopped after {config.MAX_STEPS} steps without a final answer."}

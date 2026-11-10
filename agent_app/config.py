@@ -23,6 +23,13 @@ EXT_DIR = DATA_DIR / "extensions"
 SESSIONS_DIR = DATA_DIR / "sessions"
 BUILTIN_SKILLS_DIR = ROOT / "skills"
 
+# Optional feature packs, shipped with the app but switchable. Diagrams: draw.io creation/reading (tools + skill).
+DIAGRAMS_ENABLED = os.getenv("OPENJANUS_DIAGRAMS", "1").strip().lower() not in ("0", "false", "no", "off")
+DIAGRAMS_DIR = DATA_DIR / "diagrams"
+IMAGES_ENABLED = DIAGRAMS_ENABLED  # image attachments ship with the diagrams pack for now (kept separate so they can be split later)
+UPLOADS_DIR = DATA_DIR / "uploads"
+OPTIONAL_SKILLS_DIRS = [ROOT / "optional" / "diagrams" / "skills"] if DIAGRAMS_ENABLED else []
+
 DEFAULT_MODELS = {
     "claude": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5-5"),
     "gemini": os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),

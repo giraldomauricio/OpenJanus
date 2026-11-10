@@ -230,7 +230,7 @@ class IntrospectionMixin:
                 ftype = inferred if inferred in ("date", "datetime") else "string"
                 if inferred in ("integer", "number"):
                     notes.append(f"'{name}' is declared TEXT and every value looks {inferred}; kept as string because "
-                                 f"the stored values are text. Use CAST({name} AS {'INTEGER' if inferred == 'integer' else 'REAL'}) in queries.")
+                                 f"the stored values are text. Use CAST({name} AS {'INTEGER' if inferred == 'integer' else 'REAL'}) in queries, or convert_column to store real numbers (dry run first, ask the user).")
             elif family == "none":
                 ftype = inferred
             else:

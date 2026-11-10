@@ -13,6 +13,9 @@ do not try to call it. Never claim a pending tool or skill is available.
 - **Tool** = code that does something (fetch data from a URL, transform data, compute, write rows).
 - **Skill** = instructions for how/when to do a recurring task, possibly combining existing tools.
 - Prefer an existing tool or skill if one fits (`list_extensions`). Prefer a skill if no new code is needed.
+- To CHANGE an approved tool or skill, propose it again under the SAME name. The user sees it as a replacement and compares it
+  with the current version; the old one keeps working until they approve, then it is archived. The user can also retire an approved
+  tool or skill themselves in the Approvals panel; you cannot.
 - Keep each tool small and single-purpose.
 - NEVER simulate, mock or hard-code data. A tool must fetch or compute real results. If that is impossible under the rules below, tell the user instead of proposing it.
 
@@ -38,7 +41,26 @@ def run(params: Params, ctx: ToolContext) -> dict:
   `update(model, values, where)`, `delete(model, where)`, `define_model(ModelSpec)`.
   Never write SQL for writes.
 - Raise `ValueError("helpful message")` for expected failures. Do not catch and hide errors.
-- Never hard-code secrets. If an API needs a key, say so in the rationale and let the user decide how to supply it.
+- Never hard-code secrets and NEVER make a token/password/API key a tool parameter: parameters travel through the chat. See "Secrets".
+
+### Secrets (API keys, tokens, passwords)
+The user keeps them in the server's environment (the `.env` file). You cannot read them and must never ask the user to paste one.
+Declare which ones the tool needs and where they may be sent, at module level, and put a placeholder in a request HEADER:
+
+```python
+SECRETS = {"BITBUCKET_ACCESS_TOKEN": ["api.bitbucket.org"]}   # env var name -> exact hosts it may be sent to (https only)
+
+def run(params: Params, ctx: ToolContext) -> dict:
+    r = ctx.http.get("https://api.bitbucket.org/2.0/repositories/" + params.workspace,
+                     headers={"Authorization": "Bearer {secret:BITBUCKET_ACCESS_TOKEN}"})
+```
+- `{secret:NAME}` inserts the value; `{basic:USERNAME:NAME}` inserts base64("USERNAME:value") for Basic auth
+  (`"Authorization": "Basic {basic:" + params.username + ":BITBUCKET_APP_PASSWORD}"`; a username is not secret, so it may be a parameter).
+- Placeholders work in headers only. The real value is filled in by the app when the request is sent: your code never sees it,
+  and it is only sent to the declared hosts, including after redirects.
+- Use the real variable name the user mentioned (e.g. BITBUCKET_ACCESS_TOKEN) and the API's real host. Say in the rationale which
+  variables the user must set in `.env` (then restart OpenJanus). A missing variable gives a clear error naming it.
+- The reviewer sees the declared secrets and hosts when approving.
 
 ### Tools that work with the user's own tables
 Read their meaning at runtime with `ctx.db.get_spec("table")` instead of hard-coding it, and follow `references` for joins.

@@ -12,6 +12,7 @@ from typing import Any, Iterator, Literal
 from pydantic import ValidationError
 
 from .introspect import IntrospectionMixin
+from .migrate import MigrationMixin
 from .models import ModelSpec, quote
 
 _ALLOWED_READ_ACTIONS = {
@@ -32,7 +33,7 @@ def format_validation_error(e: ValidationError, prefix: str = "") -> str:
     return "; ".join(parts)
 
 
-class Database(IntrospectionMixin):
+class Database(IntrospectionMixin, MigrationMixin):
     def __init__(self, path: Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -173,8 +174,8 @@ class Database(IntrospectionMixin):
                 return {"status": "unchanged", **spec.export()}
             raise ValueError(
                 f"Model '{spec.name}' already exists with a different definition. "
-                f"Existing: {existing.model_dump_json()}. Schema changes are not supported yet; "
-                "create a new model (e.g. a new name) and copy the data."
+                f"Existing: {existing.model_dump_json()}. To change an existing model use alter_model "
+                "(add/drop/rename/change fields) or convert_column (change a column's type)."
             )
         if spec.name in self.table_names():
             raise ValueError(f"A table named '{spec.name}' already exists that was not created from a model. "

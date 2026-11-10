@@ -10,6 +10,8 @@ import ast
 import re
 from dataclasses import dataclass, field
 
+from ..tool_secrets import SecretError, placeholder_names, validate_declaration
+
 MAX_SOURCE_CHARS = 20_000
 
 ALLOWED_MODULES = {
@@ -88,6 +90,22 @@ def lint_tool_source(source: str) -> LintResult:
                                   "and ctx.http (get/post) are available")
         elif isinstance(node, (ast.Global, ast.Nonlocal)):
             res.errors.append("global/nonlocal are not allowed")
+
+    declared: dict[str, list[str]] = {}
+    for n in tree.body:  # module-level SECRETS = {...}: what the reviewer must agree to
+        if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "SECRETS" for t in n.targets):
+            try:
+                declared = validate_declaration(ast.literal_eval(n.value))
+            except (SecretError, ValueError) as e:
+                res.errors.append(f"SECRETS: {e}")
+    used = {name for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)
+            for name in placeholder_names(node.value)}
+    for name in sorted(used - set(declared)):
+        res.errors.append(f"Placeholder for secret {name} is used but not declared in SECRETS")
+    for name, hosts in declared.items():
+        caps.add(f"secret:{name}->{','.join(hosts)}")
+    if declared:
+        caps.add("network")
 
     top = {n.name: n for n in tree.body if isinstance(n, (ast.ClassDef, ast.FunctionDef))}
     params = top.get("Params")

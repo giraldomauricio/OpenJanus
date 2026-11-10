@@ -20,6 +20,8 @@ from urllib.parse import urljoin
 
 import httpx
 
+from .tool_secrets import SecretResolver
+
 MAX_BYTES = 2_000_000
 
 
@@ -63,15 +65,26 @@ def pin(request: httpx.Request) -> httpx.Request:
 
 class SafeHttp:
     transport: httpx.BaseTransport | None = None  # tests inject a fake transport here
+    resolver: SecretResolver | None = None        # set on the scoped copy a tool with SECRETS receives
+
+    def scoped(self, declared: dict[str, list[str]]) -> "SafeHttp":
+        """A copy for one generated tool: header placeholders for ITS declared secrets are filled in (see tool_secrets.py)."""
+        s = SafeHttp()
+        s.transport, s.resolver = self.transport, SecretResolver(declared)
+        return s
 
     def _request(self, method: str, url: str, **kw: Any) -> HttpResponse:
+        headers = kw.pop("headers", None)
         with httpx.Client(follow_redirects=False, timeout=20, transport=self.transport) as client:
             for _ in range(4):
-                r = client.send(pin(client.build_request(method, url, **kw)))
+                # per hop: a redirect to a host that may not receive the secret fails here instead of leaking it
+                hop_headers = self.resolver.headers_for(url, headers) if self.resolver else headers
+                r = client.send(pin(client.build_request(method, url, headers=hop_headers, **kw)))
                 if r.is_redirect and "location" in r.headers:
                     url = urljoin(url, r.headers["location"])
                     continue
-                return HttpResponse(r.status_code, r.text[:MAX_BYTES])
+                text = r.text[:MAX_BYTES]
+                return HttpResponse(r.status_code, self.resolver.redact(text) if self.resolver else text)
         raise BlockedURL("Too many redirects")
 
     def get(self, url: str, params: dict | None = None, headers: dict | None = None) -> HttpResponse:

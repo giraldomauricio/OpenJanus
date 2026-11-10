@@ -47,10 +47,26 @@ class SessionStore:
         s.updated = time.time()
         data = {"id": s.id, "title": s.title, "provider": s.provider, "model": s.model, "created": s.created, "updated": s.updated,
                 "events": s.events, "messages": [_encode_message(m) for m in s.messages]}
+        self._write(path, data)
+
+    def _write(self, path: Path, data: dict[str, Any]) -> None:
         fd, tmp = tempfile.mkstemp(dir=self.dir, suffix=".tmp")
         with os.fdopen(fd, "w") as f:
             json.dump(data, f, default=str, ensure_ascii=False)
         os.replace(tmp, path)  # atomic: a crash mid-write cannot corrupt the saved chat
+
+    def rename(self, sid: str, title: str) -> bool:
+        """Change only the title of a saved chat (keeps `updated`, so the history order does not change)."""
+        path = self._path(sid)
+        if path is None or not path.exists():
+            return False
+        try:
+            d = json.loads(path.read_text())
+        except ValueError:
+            return False
+        d["title"] = title
+        self._write(path, d)
+        return True
 
     def load(self, sid: str) -> Session | None:
         path = self._path(sid)

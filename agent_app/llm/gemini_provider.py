@@ -4,6 +4,7 @@ import os
 import uuid
 from typing import Any, Iterator
 
+from .. import images
 from .base import LLMProvider, ToolCall, ToolDef, Turn, collect
 
 
@@ -24,7 +25,10 @@ class GeminiProvider(LLMProvider):
         out = []
         for m in messages:
             if m["role"] == "user":
-                out.append(t.Content(role="user", parts=[t.Part(text=m["content"])]))
+                imgs, missing = images.resolve(m)
+                note = ("\n" + images.missing_note(missing)) if missing else ""
+                out.append(t.Content(role="user", parts=[t.Part.from_bytes(data=data, mime_type=mime) for mime, data in imgs]
+                                     + [t.Part(text=m["content"] + note)]))
             elif m["role"] == "assistant":
                 if isinstance(m.get("raw"), t.Content):  # keeps thought signatures intact
                     out.append(m["raw"])

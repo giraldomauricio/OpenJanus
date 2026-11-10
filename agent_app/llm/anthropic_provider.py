@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Iterator
 
+from .. import images
 from .base import LLMProvider, ToolCall, ToolDef, Turn, collect
 
 
@@ -28,7 +29,12 @@ class AnthropicProvider(LLMProvider):
         out: list[dict[str, Any]] = []
         for m in messages:
             if m["role"] == "user":
-                out.append({"role": "user", "content": m["content"]})
+                imgs, missing = images.resolve(m)
+                if imgs or missing:
+                    blocks = [{"type": "image", "source": {"type": "base64", "media_type": mime, "data": images.b64(data)}} for mime, data in imgs]
+                    out.append({"role": "user", "content": blocks + [{"type": "text", "text": m["content"] + ("\n" + images.missing_note(missing) if missing else "")}]})
+                else:
+                    out.append({"role": "user", "content": m["content"]})
             elif m["role"] == "assistant":
                 blocks: list[dict[str, Any]] = []
                 if m["text"]:

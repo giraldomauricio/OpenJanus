@@ -32,16 +32,20 @@ def parse_skill(text: str, origin: str) -> Skill:
 
 
 class SkillStore:
-    def __init__(self, builtin_dir: Path, extensions: ExtensionManager):
+    def __init__(self, builtin_dir: Path, extensions: ExtensionManager, optional_dirs: list[Path] | None = None):
         self.builtin_dir = Path(builtin_dir)
         self.extensions = extensions
+        self.dirs = [self.builtin_dir, *map(Path, optional_dirs or [])]  # optional feature packs ship extra built-in skills
+
+    def _files(self) -> list[Path]:
+        return [p for d in self.dirs for p in sorted(d.glob("*/SKILL.md"))]
 
     def builtin_names(self) -> set[str]:
-        return {p.parent.name for p in self.builtin_dir.glob("*/SKILL.md")}
+        return {p.parent.name for p in self._files()}
 
     def all(self) -> dict[str, Skill]:
         out: dict[str, Skill] = {}
-        for p in sorted(self.builtin_dir.glob("*/SKILL.md")):
+        for p in self._files():
             s = parse_skill(p.read_text(), "builtin")
             out[s.name] = s
         for name, p in self.extensions.approved_skill_files():

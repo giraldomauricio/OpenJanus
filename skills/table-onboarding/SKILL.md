@@ -1,7 +1,7 @@
 ---
 name: table-onboarding
-description: Use when the user imported or created a table themselves (CSV import, existing database) and wants you to understand it, build a model for it, relate it to other tables, or build tools and skills around it.
-tools: list_tables, profile_table, find_relationships, adopt_table, annotate_model, describe_table, export_models
+description: Use when the user imported or created a table themselves (CSV or JSON import, existing database) and wants you to understand it, build a model for it, relate it to other tables, or build tools and skills around it.
+tools: list_tables, profile_table, find_relationships, adopt_table, annotate_model, describe_table, export_models, convert_column
 ---
 # Learning a table the user created
 
@@ -20,6 +20,8 @@ to it, and nothing about what its columns mean is recorded.
    - If it fails because names are not snake_case, it returns suggested renames. Renaming alters the user's table,
      so show the user the mapping and get a yes first.
    - Read `notes` in the result (TEXT columns that look numeric, rows that do not validate) and tell the user.
+   - If columns are TEXT but really hold numbers/dates/booleans, offer `convert_column` (dry run first, show the sample, ask the
+     user, then apply). For dates that are not ISO, ask for the order (day-first or month-first) before choosing `date_format`.
 5. `annotate_model`: record relationships with `references` (e.g. `{"customer_id": "customers.customer_id"}`) and meanings with
    `field_descriptions`, refined with what the user told you. Check the result: if it errors, fix and retry, and if it
    still fails, tell the user it was NOT recorded. This is how knowledge persists for later chats, tools and skills.

@@ -1,0 +1,9 @@
+{
+  "theme": "dark",
+  "colors": { "accent": "#7aa2ff", "bg": "#14161a" },
+  "fonts": { "body": "Inter, system-ui, sans-serif", "mono": "JetBrains Mono, Menlo, monospace", "size": 14 },
+  "radius": 10,
+  "topbar": { "visible": true, "title": "OpenJanus", "show": ["logo", "title", "provider", "model", "theme", "history", "import", "new", "rename", "delete"] },
+  "chat": { "placeholder": "Ask about your data, or ask for a new tool…" },
+  "sidebar": { "position": "right", "width": 400, "tabs": ["approvals", "capabilities", "database"], "default_tab": "approvals" }
+}

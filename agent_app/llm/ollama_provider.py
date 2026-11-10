@@ -8,6 +8,7 @@ from typing import Any, Iterator
 import httpx
 
 from .. import config
+from .. import images
 from .base import LLMProvider, ToolCall, ToolDef, Turn, collect
 
 _THINK = re.compile(r"<think>.*?</think>", re.S)
@@ -57,7 +58,11 @@ class OllamaProvider(LLMProvider):
         out: list[dict[str, Any]] = [{"role": "system", "content": system}]
         for m in messages:
             if m["role"] == "user":
-                out.append({"role": "user", "content": m["content"]})
+                imgs, missing = images.resolve(m)
+                msg = {"role": "user", "content": m["content"] + (("\n" + images.missing_note(missing)) if missing else "")}
+                if imgs:
+                    msg["images"] = [images.b64(data) for _, data in imgs]
+                out.append(msg)
             elif m["role"] == "assistant":
                 msg: dict[str, Any] = {"role": "assistant", "content": m["text"]}
                 if m["tool_calls"]:
@@ -71,7 +76,20 @@ class OllamaProvider(LLMProvider):
     def generate(self, system: str, messages: list[dict[str, Any]], tools: list[ToolDef]) -> Turn:
         return collect(self.stream(system, messages, tools))
 
+    def _require_vision(self, messages: list[dict[str, Any]]) -> None:
+        """Ollama silently ignores images for text-only models, which makes the model invent a description: refuse instead."""
+        if not any(m.get("images") for m in messages if m["role"] == "user"):
+            return
+        try:
+            caps = httpx.post(f"{config.OLLAMA_HOST}/api/show", json={"model": self.model}, timeout=10).json().get("capabilities")
+        except Exception:
+            return  # cannot tell: let Ollama try
+        if isinstance(caps, list) and "vision" not in caps:
+            raise RuntimeError(f"The Ollama model '{self.model}' cannot read images. Choose a vision model (e.g. a llava or qwen-vl "
+                               "variant) or switch the provider to Claude or Gemini for this chat.")
+
     def _stream(self, system: str, messages: list[dict[str, Any]], tools: list[ToolDef]) -> Iterator[str | Turn]:
+        self._require_vision(messages)
         body = {
             "model": self.model,
             "stream": True,

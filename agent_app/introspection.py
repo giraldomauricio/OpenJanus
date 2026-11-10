@@ -10,6 +10,7 @@ from itertools import combinations
 from typing import Any, Callable
 
 from .db import Database
+from .db.migrate import ConversionError, convert_value
 from .db.models import quote
 from .skills import Skill, parse_skill
 
@@ -199,6 +200,23 @@ def audit_database(db: Database) -> dict[str, Any]:
                 f.append(finding("info", "database", "undocumented-fields", [name], f"{len(bare)}/{len(spec.fields)} fields lack descriptions.",
                                  "Use annotate_model so later queries and tools can rely on the meaning of each column."))
             refs = {x.name: x.references for x in spec.fields if x.references}
+            for x in spec.fields:  # text that is really typed data
+                if x.type != "string" or x.primary_key or x.unique or x.name.endswith(("id", "code", "zip", "phone", "postal", "serial", "hash", "token", "key")) or n == 0:
+                    continue
+                vals = [r["v"] for r in db.query(f"SELECT {quote(x.name)} AS v FROM {quote(name)} WHERE {quote(x.name)} IS NOT NULL "
+                                                 f"AND TRIM({quote(x.name)}) != '' LIMIT 300", limit=300)["rows"]]
+                if len(vals) < 3 or any(isinstance(v, str) and (re.match(r"^\s*[+-]?0\d", v) or len(re.sub(r"\D", "", v)) > 15) for v in vals):
+                    continue  # leading zeros or very long digit strings are identifiers (serials, card numbers), not quantities
+                for to in ("integer", "number", "date"):
+                    try:
+                        for v in vals:
+                            convert_value(v, to)
+                    except ConversionError:
+                        continue
+                    f.append(finding("low", "database", "text-column-looks-typed", [f"{name}.{x.name}"],
+                                     f"Stored as text, but all sampled values parse as {to}.",
+                                     f"convert_column to {to} (dry run first; confirm with the user)."))
+                    break
         else:
             refs = {}
         for c in cols[name]:
