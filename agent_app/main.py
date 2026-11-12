@@ -19,7 +19,7 @@ from .agent import Agent, Session
 from .db import Database
 from .db import file_import
 from .db.csv_import import import_csv
-from .extensions import ExtensionManager, PackageError, ProposalError
+from .extensions import ExtensionManager, PackageError, ProposalError, SignatureError
 from .llm import PROVIDERS, make_provider, ollama_models, provider_status
 from .introspection import audit_capabilities, audit_database
 from .sdk import BUILTIN_TOOLS
@@ -86,8 +86,22 @@ def get_ui_config() -> dict[str, Any]:
     return load_ui_config()
 
 
+MAX_LIVE_SESSIONS = 50
+
+
+def trim_sessions() -> None:
+    """Keep memory bounded: forget the least recently used chats that are saved on disk and idle (they reload on demand).
+    Never drops a running chat, or one that has not been saved yet (it would be lost)."""
+    if len(sessions) <= MAX_LIVE_SESSIONS:
+        return
+    idle = sorted((s for s in sessions.values() if not s.lock.locked() and store.exists(s.id)), key=lambda s: s.updated)
+    for s in idle[: len(sessions) - MAX_LIVE_SESSIONS]:
+        sessions.pop(s.id, None)
+
+
 @app.post("/api/sessions", dependencies=[Depends(require_token)])
 def new_session() -> dict[str, str]:
+    trim_sessions()
     s = Session()
     sessions[s.id] = s
     return {"id": s.id}
@@ -212,15 +226,37 @@ def list_extensions() -> dict[str, Any]:
 
 
 @app.get("/api/extensions/export")
-def export_extensions(items: str = "") -> Response:
+def export_extensions(items: str = "", name: str = "", version: str = "", description: str = "", author: str = "",
+                      sign: bool = False) -> Response:
     """Download approved tools/skills as a .janus package. `items` = "tool:name,skill:name" (empty = everything approved)."""
     try:
         wanted = [tuple(x.split(":", 1)) for x in items.split(",") if x] or None
-        data, included = extensions.export_package(wanted)  # type: ignore[arg-type]
+        data, result = extensions.export_package(wanted, {"name": name, "version": version,  # type: ignore[arg-type]
+                                                           "description": description, "author": author}, sign)
     except (PackageError, ValueError) as e:
         raise HTTPException(400, str(e)) from e
-    fname = (included[0]["name"] if len(included) == 1 else "openjanus-extensions") + ".janus"
+    fname = f"{result['package']['name']}-{result['package']['version']}.janus"
     return Response(data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@app.get("/api/publishers")
+def publishers() -> dict:
+    """This installation's signing fingerprint (None until it first signs) and the publishers you chose to trust."""
+    return {"own": extensions.signer.own_fingerprint(), "trusted": extensions.signer.trusted()}
+
+
+class TrustRequest(BaseModel):
+    fingerprint: str
+    label: str
+
+
+@app.post("/api/publishers/trust", dependencies=[Depends(require_token)])
+def trust_publisher(req: TrustRequest) -> dict:
+    try:
+        extensions.signer.trust(req.fingerprint.strip().lower(), req.label)
+    except SignatureError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"trusted": extensions.signer.trusted()}
 
 
 @app.post("/api/extensions/import", dependencies=[Depends(require_token)])

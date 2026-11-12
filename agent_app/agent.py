@@ -21,7 +21,7 @@ from .introspection import build_catalog
 from .tables import as_table
 from .llm import LLMProvider, ToolDef, Turn
 from .tool_secrets import validate_declaration
-from .sdk import BUILTIN_TOOLS, AgentContext, Tool, ToolContext
+from .sdk import BUILTIN_TOOLS, AgentContext, Tool, ToolContext, restricted_context
 from .skills import SkillStore
 from . import tools as _builtin  # noqa: F401  (registers built-in tools)
 
@@ -85,7 +85,7 @@ class Agent:
     def __init__(self, db: Database, extensions: ExtensionManager, skills: SkillStore):
         self.db, self.extensions, self.skills = db, extensions, skills
         http = self.http = SafeHttp()
-        self.tool_ctx = ToolContext(db, http)
+        self.tool_ctx = restricted_context(db, http)  # generated tools get a narrowed view, never the raw Database / SafeHttp
         self.agent_ctx = AgentContext(db, http, extensions, skills)
         self._generated_cache: dict[tuple[str, int], Tool] = {}
         self.usage: Callable[[], dict[str, int]] = lambda: {}  # tool name -> times called in saved chats (set by the server)
@@ -151,7 +151,7 @@ class Agent:
         if (refusal := self._gate(session, name, args)) is not None:
             return False, refusal, None
         ctx = self.agent_ctx if t.origin == "builtin" else (
-            ToolContext(self.db, self.http.scoped(t.secrets)) if t.secrets else self.tool_ctx)
+            restricted_context(self.db, self.http.scoped(t.secrets)) if t.secrets else self.tool_ctx)
         result = None
         try:
             result = t.call(args, ctx)

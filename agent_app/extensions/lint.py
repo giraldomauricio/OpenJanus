@@ -58,7 +58,20 @@ def lint_tool_source(source: str) -> LintResult:
         return res
 
     caps: set[str] = set()
+    parent = {id(c): n for n in ast.walk(tree) for c in ast.iter_child_nodes(n)}
     for node in ast.walk(tree):
+        # `ctx` may only be used as ctx.db.<method>(...) / ctx.http.<get|post>(...), written out each time. No aliases
+        # (d = ctx.db), no passing ctx around: an alias hides what the tool does from the capability badges the reviewer relies on.
+        if isinstance(node, ast.Name) and node.id == "ctx" and isinstance(node.ctx, ast.Load):
+            p = parent.get(id(node))
+            if not (isinstance(p, ast.Attribute) and p.attr in ("db", "http")):
+                res.errors.append(f"`ctx` may only be used as ctx.db.<method>(...) or ctx.http.get/post(...) (line {node.lineno})")
+            else:
+                pp = parent.get(id(p))
+                if not (isinstance(pp, ast.Attribute) and pp.value is p):
+                    res.errors.append(f"Write ctx.{p.attr}.<method>(...) in full; do not store or pass ctx.{p.attr} (line {node.lineno})")
+                elif p.attr == "http" and pp.attr not in ("get", "post"):
+                    res.errors.append(f"ctx.http.{pp.attr} is not allowed; only ctx.http.get and ctx.http.post (line {node.lineno})")
         if isinstance(node, ast.Import):
             for a in node.names:
                 if not _module_allowed(a.name):

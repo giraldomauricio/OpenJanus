@@ -34,6 +34,8 @@ def run(params: Params, ctx: ToolContext) -> dict:
 - Allowed imports: pydantic, typing, json, re, math, datetime, decimal, statistics, collections, itertools, functools,
   csv, io, textwrap, urllib.parse, html, hashlib, base64, uuid, enum, string.
 - No `open`, `eval`, `exec`, `getattr`, no underscore-prefixed attributes, no other imports. No files, no subprocesses.
+- Always write `ctx.db.<method>(...)` and `ctx.http.get/post(...)` out in full. Do NOT store them in variables (`d = ctx.db`), pass `ctx` to helper
+  functions, or touch any other attribute of `ctx`: the lint rejects it, and at runtime nothing else exists. Pass plain values to helpers instead.
 - HTTP only via `ctx.http.get(url, params=..., headers=...)` / `ctx.http.post(url, json=...)`. The response has
   `.status`, `.text` and `.json()`. Local/private addresses are blocked.
 - Database only via `ctx.db`: `query(sql, params)`, `describe(table)`, `list_tables()`, `get_spec(model)` (columns, descriptions,

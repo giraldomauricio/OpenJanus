@@ -42,7 +42,7 @@ def rebuild(raw, mutate):
 
 def test_roundtrip_lands_in_pending_never_approved(pair):
     a, b = pair
-    raw, inc = a.export_package()
+    raw, res = a.export_package(); inc = res["items"]
     assert {(i["kind"], i["name"]) for i in inc} == {("tool", "thing_tool"), ("skill", "thing-skill")}
     r = b.import_package(raw)
     assert len(r["imported"]) == 2 and not r["skipped"]
@@ -56,7 +56,7 @@ def test_roundtrip_lands_in_pending_never_approved(pair):
 
 def test_exporting_a_skill_brings_its_tools(pair):
     a, _ = pair
-    _, inc = a.export_package([("skill", "thing-skill")])
+    _, res = a.export_package([("skill", "thing-skill")]); inc = res["items"]
     assert ("tool", "thing_tool") in {(i["kind"], i["name"]) for i in inc}
 
 
@@ -115,3 +115,111 @@ def test_builtin_name_collision_skipped_and_replace_flagged(pair):
     c = ExtensionManager(a.root.parent / "c", lambda: set(), lambda: {"clash-skill"})
     r = c.import_package(a.export_package([("skill", "clash-skill")])[0])
     assert r["skipped"] and "built-in" in r["skipped"][0]["reason"]
+
+
+SECRET_CODE = "SECRETS = {'DEMO_TOKEN': ['api.example.com']}\n" + CODE.replace(
+    'return {"ok": True}', 'return {"ok": ctx.http.get("https://api.example.com/x", headers={"Authorization": "Bearer {secret:DEMO_TOKEN}"}).status}')
+
+
+def test_metadata_roundtrip_and_defaults(pair, monkeypatch):
+    a, b = pair
+    raw, res = a.export_package(info={"name": "my-pack", "version": "2.1.0", "description": "Demo pack", "author": "Ana"})
+    assert res["package"]["name"] == "my-pack" and res["package"]["version"] == "2.1.0"
+    r = b.import_package(raw)
+    assert r["package"] == {"name": "my-pack", "version": "2.1.0", "description": "Demo pack", "author": "Ana"}
+    assert len(r["fingerprint"]) == 16
+    t = next(i for i in b.list_items("pending") if i["name"] == "thing_tool")
+    assert {k: t["package"][k] for k in ("name", "version", "author")} == {"name": "my-pack", "version": "2.1.0", "author": "Ana"} \
+        and t["package"]["fingerprint"] == r["fingerprint"] and "my-pack 2.1.0 by Ana" in t["rationale"]
+    b.approve("tool", "thing_tool")  # provenance survives approval
+    assert next(i for i in b.list_items("approved") if i["name"] == "thing_tool")["package"]["name"] == "my-pack"
+    assert a.export_package([("tool", "thing_tool")])[1]["package"] == {"name": "thing-tool", "version": "1.0.0", "requires_secrets": {}}
+
+
+@pytest.mark.parametrize("bad", [{"name": "X"}, {"version": "1.0"}, {"description": "a\nb"}, {"author": "x" * 81}])
+def test_bad_metadata_rejected_on_export(pair, bad):
+    with pytest.raises(PackageError):
+        pair[0].export_package(info=bad)
+
+
+def test_required_secrets_come_from_source_not_manifest(tmp_path, monkeypatch):
+    a, b = mk(tmp_path, "a"), mk(tmp_path, "b")
+    a.propose_tool("secret_tool", "calls an api with a secret", SECRET_CODE, "r"); a.approve("tool", "secret_tool")
+    raw, res = a.export_package()
+    assert res["package"]["requires_secrets"] == {"DEMO_TOKEN": ["api.example.com"]}
+    monkeypatch.delenv("DEMO_TOKEN", raising=False)
+    assert b.import_package(raw)["requires_secrets"] == [{"name": "DEMO_TOKEN", "hosts": ["api.example.com"], "configured": False}]
+    monkeypatch.setenv("DEMO_TOKEN", "x")
+    lie = rebuild(raw, lambda f: f.update({"manifest.json": json.dumps({**json.loads(f["manifest.json"]), "package": {
+        "name": "p-pack", "version": "1.0.0", "requires_secrets": {}}}).encode()}))
+    assert b.import_package(lie)["requires_secrets"][0]["configured"] is True  # still reported: derived from the code
+
+
+def test_old_or_malformed_metadata_still_imports(pair):
+    a, b = pair
+    raw, _ = a.export_package()
+    for pk in (None, "junk", {"name": "BAD NAME", "version": "x"}):
+        def mutate(f, pk=pk):
+            m = json.loads(f["manifest.json"]); m.pop("package", None)
+            if pk is not None:
+                m["package"] = pk
+            f["manifest.json"] = json.dumps(m).encode()
+        r = b.import_package(rebuild(raw, mutate))
+        assert len(r["imported"]) == 2 and r["package"]["name"] in ("unnamed-package",)
+
+
+# --- signing -----------------------------------------------------------------------------------------------------------
+
+def test_signed_package_roundtrip_and_trust(pair):
+    a, b = pair
+    raw, res = a.export_package(sign=True)
+    fp = a.signer.own_fingerprint()
+    assert fp and res["package"]["signed_by"] == fp
+    r = b.import_package(raw)
+    assert r["signer"] == {"fingerprint": fp, "trusted": False, "label": None}
+    assert next(i for i in b.list_items("pending") if i["name"] == "thing_tool")["package"]["signer_trusted"] is False
+    b.signer.trust(fp, "Ana")  # trusting later is reflected in the listing without re-importing
+    p = next(i for i in b.list_items("pending") if i["name"] == "thing_tool")["package"]
+    assert p["signer_trusted"] is True and p["signer_label"] == "Ana"
+    assert b.import_package(raw)["signer"]["trusted"] is True
+
+
+def test_unsigned_package_has_no_signer(pair):
+    a, b = pair
+    assert b.import_package(a.export_package()[0])["signer"] is None
+    assert a.signer.own_fingerprint() is None  # exporting unsigned never creates a key
+
+
+def test_modified_signed_package_is_refused(pair):
+    a, b = pair
+    raw, _ = a.export_package(sign=True)
+    for mutate in (lambda f: f.update({"manifest.json": f["manifest.json"].replace(b"1.0.0", b"9.9.9")}),
+                   lambda f: f.update({"signature.json": b"{}"}),
+                   lambda f: f.update({"signature.json": b"not json"})):
+        with pytest.raises(PackageError):
+            b.import_package(rebuild(raw, mutate))
+    assert b.list_items("pending") == []
+
+
+def test_resigned_by_someone_else_shows_a_different_signer(pair, tmp_path):
+    a, b = pair
+    raw, _ = a.export_package(sign=True)
+    evil = mk(tmp_path, "evil")
+    manifest = zipfile.ZipFile(io.BytesIO(raw)).read("manifest.json")
+    r = b.import_package(rebuild(raw, lambda f: f.update({"signature.json": json.dumps(evil.signer.sign(manifest)).encode()})))
+    assert r["signer"]["fingerprint"] == evil.signer.own_fingerprint() != a.signer.own_fingerprint()
+
+
+def test_trust_validation(pair):
+    from agent_app.extensions import SignatureError
+    a, _ = pair
+    for fp, label in (("zz", "x"), ("0" * 16, "  ")):
+        with pytest.raises(SignatureError):
+            a.signer.trust(fp, label)
+    assert a.signer.trusted() == {}
+
+
+def test_private_key_is_owner_only(pair):
+    a, _ = pair
+    a.export_package(sign=True)
+    assert (a.signer._key_path.stat().st_mode & 0o077) == 0

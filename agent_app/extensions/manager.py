@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 from .lint import TOOL_NAME, lint_skill, lint_tool_source
+from .signing import Signer
 
 Kind = Literal["tool", "skill"]
 Status = Literal["pending", "approved", "rejected", "retired"]
@@ -61,6 +62,7 @@ class ExtensionManager:
         self._lock = threading.RLock()
         self._reserved_tools = reserved_tool_names
         self._reserved_skills = reserved_skill_names
+        self.signer = Signer(self.root / "trust")
         for st in ("pending", "approved", "rejected", "retired"):
             for k in ("tools", "skills"):
                 (self.root / st / k).mkdir(parents=True, exist_ok=True)
@@ -130,11 +132,14 @@ class ExtensionManager:
                     "warning": f"References unknown tools: {unknown}" if unknown else None}
 
     def _write_meta(self, kind: Kind, name: str, status: Status, description: str, rationale: str,
-                    caps: list[str]) -> None:
-        self._meta(kind, name, status).write_text(json.dumps({
+                    caps: list[str], package: dict[str, str] | None = None) -> None:
+        meta: dict[str, Any] = {
             "description": description, "rationale": rationale, "capabilities": caps,
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        }))
+        }
+        if package:  # where an imported item came from; shown to the reviewer
+            meta["package"] = package
+        self._meta(kind, name, status).write_text(json.dumps(meta))
 
     # --- review (called only from the UI endpoints) ------------------------
 
@@ -148,6 +153,9 @@ class ExtensionManager:
                 mp = self._meta(kind, n, status)  # type: ignore[arg-type]
                 meta = json.loads(mp.read_text()) if mp.exists() else {}
                 item = {"kind": kind, "name": n, "status": status, **meta}
+                if (pk := item.get("package")) and pk.get("signer"):  # trust is looked up now, so trusting a publisher later shows up
+                    t = self.signer.trusted().get(pk["signer"])
+                    item["package"] = {**pk, "signer_trusted": bool(t), "signer_label": t["label"] if t else None}
                 if status == "pending":
                     item["replaces_approved"] = self._content(kind, n, "approved").exists()  # type: ignore[arg-type]
                 items.append(item)
@@ -237,9 +245,10 @@ class ExtensionManager:
 
     # --- sharing (packages are .janus ZIP files; importing only ever creates PENDING items) -------------
 
-    def export_package(self, items: list[tuple[str, str]] | None = None) -> tuple[bytes, list[dict[str, str]]]:
+    def export_package(self, items: list[tuple[str, str]] | None = None,
+                       info: dict[str, str] | None = None, sign: bool = False) -> tuple[bytes, dict[str, Any]]:
         from .package import export_package
-        return export_package(self, items)
+        return export_package(self, items, info, sign)
 
     def import_package(self, raw: bytes) -> dict[str, Any]:
         from .package import import_package

@@ -1,6 +1,9 @@
 """Share approved tools/skills as a single ZIP ("package", extension .janus) and import one from someone else.
 
-    manifest.json                    {"format": "openjanus-package", "version": 1, "items": [{kind, name, description, sha256}]}
+    signature.json                   optional Ed25519 signature of manifest.json's exact bytes (see signing.py)
+    manifest.json                    {"format": "openjanus-package", "version": 1,
+                                      "package": {name, version, description?, author?, requires_secrets},
+                                      "items": [{kind, name, description, sha256}]}
     tools/<name>.py                  the approved tool source, exactly as approved
     skills/<name>/SKILL.md           the approved skill
 
@@ -15,12 +18,14 @@ import ast
 import hashlib
 import io
 import json
+import os
 import re
 import zipfile
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from .lint import SKILL_NAME, TOOL_NAME, lint_skill, lint_tool_source
+from .signing import SignatureError, verify
 
 if TYPE_CHECKING:
     from .manager import ExtensionManager
@@ -32,7 +37,10 @@ MAX_PACKAGE_BYTES = 5_000_000      # compressed upload
 MAX_UNPACKED_BYTES = 5_000_000     # sum of declared sizes: guards against zip bombs
 MAX_ITEMS = 100
 
-_ENTRY = re.compile(r"^(manifest\.json|tools/[a-z][a-z0-9_]{2,40}\.py|skills/[a-z][a-z0-9-]{2,40}/SKILL\.md)$")
+PACKAGE_NAME = SKILL_NAME
+VERSION_RE = re.compile(r"^\d{1,4}\.\d{1,4}\.\d{1,4}(-[0-9A-Za-z.]{1,20})?$")
+
+_ENTRY = re.compile(r"^(manifest\.json|signature\.json|tools/[a-z][a-z0-9_]{2,40}\.py|skills/[a-z][a-z0-9-]{2,40}/SKILL\.md)$")
 
 
 class PackageError(ValueError):
@@ -48,9 +56,37 @@ def _skill_tools(text: str) -> list[str]:
     return parse_skill(text, "generated").tools
 
 
-def export_package(mgr: "ExtensionManager", items: list[tuple[str, str]] | None = None) -> tuple[bytes, list[dict[str, str]]]:
+def clean_info(info: dict[str, Any] | None, default_name: str) -> dict[str, str]:
+    """Validate the package's own metadata. Used on export (user input) and on import (untrusted, shown to the reviewer)."""
+    info = info or {}
+    out = {"name": str(info.get("name") or default_name).strip(), "version": str(info.get("version") or "1.0.0").strip(),
+           "description": str(info.get("description") or "").strip(), "author": str(info.get("author") or "").strip()}
+    if not PACKAGE_NAME.match(out["name"]):
+        raise PackageError("Package name must be kebab-case: letters, digits, hyphens; 3-41 chars; start with a letter")
+    if not VERSION_RE.match(out["version"]):
+        raise PackageError("Version must look like 1.2.3 (optionally 1.2.3-beta1)")
+    if len(out["description"]) > 300 or "\n" in out["description"]:
+        raise PackageError("Description must be a single line of at most 300 characters")
+    if len(out["author"]) > 80 or "\n" in out["author"]:
+        raise PackageError("Author must be a single line of at most 80 characters")
+    return {k: v for k, v in out.items() if v}
+
+
+def required_secrets(tool_sources: list[str]) -> dict[str, list[str]]:
+    """{ENV_NAME: [hosts]} the tools declare in SECRETS, worked out from the source (never from what the package claims)."""
+    out: dict[str, set[str]] = {}
+    for src in tool_sources:
+        for cap in lint_tool_source(src).capabilities:
+            if cap.startswith("secret:"):
+                name, _, hosts = cap[7:].partition("->")
+                out.setdefault(name, set()).update(h for h in hosts.split(",") if h)
+    return {k: sorted(v) for k, v in sorted(out.items())}
+
+
+def export_package(mgr: "ExtensionManager", items: list[tuple[str, str]] | None = None,
+                   info: dict[str, Any] | None = None, sign: bool = False) -> tuple[bytes, dict[str, Any]]:
     """Zip approved items (all of them when `items` is None). A skill brings the approved generated tools it lists, so the
-    recipient gets something that works. Returns (zip bytes, what was included)."""
+    recipient gets something that works. Returns (zip bytes, {"package": metadata, "items": what was included})."""
     with mgr._lock:
         approved = {(i["kind"], i["name"]): i for i in mgr.list_items("approved")}
         wanted = list(approved) if items is None else list(dict.fromkeys(items))
@@ -72,17 +108,30 @@ def export_package(mgr: "ExtensionManager", items: list[tuple[str, str]] | None 
             files[path] = data
             manifest_items.append({"kind": kind, "name": name, "description": approved[(kind, name)].get("description", ""),
                                    "sha256": _sha(data)})
+    default = manifest_items[0]["name"].replace("_", "-") if len(manifest_items) == 1 else "openjanus-extensions"
+    meta = clean_info(info, default)
+    meta["requires_secrets"] = required_secrets([f.decode() for p, f in files.items() if p.startswith("tools/")])
     manifest = {"format": FORMAT, "version": VERSION, "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "items": manifest_items}
+                "package": meta, "items": manifest_items}
+    manifest_bytes = json.dumps(manifest, indent=2).encode()
+    signature = None
+    if sign:
+        try:
+            signature = mgr.signer.sign(manifest_bytes)  # the manifest lists every file's sha256, so this covers the whole package
+        except SignatureError as e:
+            raise PackageError(str(e)) from e
+        meta["signed_by"] = mgr.signer.own_fingerprint()
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("manifest.json", json.dumps(manifest, indent=2))
+        z.writestr("manifest.json", manifest_bytes)
+        if signature:
+            z.writestr("signature.json", json.dumps(signature, indent=2))
         for path, data in files.items():
             z.writestr(path, data)
-    return buf.getvalue(), [{"kind": i["kind"], "name": i["name"]} for i in manifest_items]
+    return buf.getvalue(), {"package": meta, "items": [{"kind": i["kind"], "name": i["name"]} for i in manifest_items]}
 
 
-def _read_archive(raw: bytes) -> tuple[dict[str, Any], dict[str, bytes]]:
+def _read_archive(raw: bytes) -> tuple[dict[str, Any], dict[str, bytes], str | None]:
     if len(raw) > MAX_PACKAGE_BYTES:
         raise PackageError("Package too large (5 MB max)")
     try:
@@ -110,7 +159,13 @@ def _read_archive(raw: bytes) -> tuple[dict[str, Any], dict[str, bytes]]:
         raise PackageError(f"Unsupported package version {manifest.get('version')} (this OpenJanus reads version {VERSION})")
     if not isinstance(manifest.get("items"), list) or not manifest["items"]:
         raise PackageError("Package lists no items")
-    return manifest, files
+    signer = None
+    if "signature.json" in files:
+        try:
+            signer = verify(files["manifest.json"], json.loads(files["signature.json"]))
+        except ValueError as e:  # includes SignatureError and bad JSON: a package that claims a signature must have a valid one
+            raise PackageError(str(e)) from e
+    return manifest, files, signer
 
 
 def _tool_name_in_source(source: str) -> str | None:
@@ -123,8 +178,18 @@ def _tool_name_in_source(source: str) -> str | None:
 
 def import_package(mgr: "ExtensionManager", raw: bytes) -> dict[str, Any]:
     """Validate a package and put each item in pending/. Items that fail are skipped with a reason; the rest still import."""
-    manifest, files = _read_archive(raw)
-    stamp_note = f"Imported from a package created {manifest.get('created_at', 'at an unknown time')}"
+    manifest, files, signer = _read_archive(raw)
+    try:  # older packages have no metadata; a malformed block is dropped rather than trusted
+        info = clean_info(manifest.get("package") if isinstance(manifest.get("package"), dict) else None, "unnamed-package")
+    except PackageError:
+        info = {"name": "unnamed-package", "version": "0.0.0"}
+    origin = {k: v for k, v in info.items() if k in ("name", "version", "author")}
+    origin["fingerprint"] = _sha(raw)[:16]  # of the file as received; compare with the sender's copy
+    if signer:
+        origin["signer"] = signer
+    stamp_note = (f"Imported from package {info['name']} {info['version']}"
+                  + (f" by {info['author']}" if info.get("author") else "")
+                  + (f": {info['description']}" if info.get("description") else ""))
     imported, skipped = [], []
     with mgr._lock:
         for item in manifest["items"][:MAX_ITEMS]:
@@ -143,14 +208,20 @@ def import_package(mgr: "ExtensionManager", raw: bytes) -> dict[str, Any]:
                     text = data.decode()
                 except UnicodeDecodeError as e:
                     raise PackageError("File is not UTF-8 text") from e
-                res = _import_one(mgr, kind, name, text, stamp_note)
+                res = _import_one(mgr, kind, name, text, stamp_note, origin)
                 imported.append({**label, **res})
             except (PackageError, ValueError) as e:
                 skipped.append({**label, "reason": str(e)})
-    return {"imported": imported, "skipped": skipped}
+    needs = required_secrets([mgr.get_source("tool", i["name"], "pending") for i in imported if i["kind"] == "tool"])
+    trusted = mgr.signer.trusted()
+    return {"package": info, "fingerprint": _sha(raw)[:16],
+            "signer": {"fingerprint": signer, "trusted": signer in trusted, "label": trusted.get(signer, {}).get("label")} if signer else None,
+            "imported": imported, "skipped": skipped,
+            "requires_secrets": [{"name": n, "hosts": h, "configured": bool(os.environ.get(n))} for n, h in needs.items()]}
 
 
-def _import_one(mgr: "ExtensionManager", kind: str, name: str, text: str, note: str) -> dict[str, Any]:
+def _import_one(mgr: "ExtensionManager", kind: str, name: str, text: str, note: str,
+                origin: dict[str, str]) -> dict[str, Any]:
     from ..skills import parse_skill
     from .manager import ProposalError
     try:
@@ -171,7 +242,7 @@ def _import_one(mgr: "ExtensionManager", kind: str, name: str, text: str, note: 
                 desc = ""
             dest = mgr._content("tool", name, "pending")
             dest.write_text(text)
-            mgr._write_meta("tool", name, "pending", desc, note, lint.capabilities)
+            mgr._write_meta("tool", name, "pending", desc, note, lint.capabilities, origin)
         else:
             if not SKILL_NAME.match(name):
                 raise PackageError("Invalid skill name")
@@ -189,7 +260,7 @@ def _import_one(mgr: "ExtensionManager", kind: str, name: str, text: str, note: 
             dest = mgr._content("skill", name, "pending")
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(text)
-            mgr._write_meta("skill", name, "pending", sk.description, note, [])
+            mgr._write_meta("skill", name, "pending", sk.description, note, [], origin)
     except ProposalError as e:
         raise PackageError(str(e)) from e
     return {"replaces_approved": mgr._content(kind, name, "approved").exists()}  # type: ignore[arg-type]

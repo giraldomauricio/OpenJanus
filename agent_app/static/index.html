@@ -35,7 +35,9 @@
   button.primary { background:var(--accent); color:var(--on-accent); border-color:var(--accent); font-weight:600; }
   button.danger { color:var(--bad); }
   main { flex:1; display:flex; min-height:0; }
-  #chat { flex:1; display:flex; flex-direction:column; min-width:0; }
+  #chat { flex:1; display:flex; flex-direction:column; min-width:0; position:relative; }
+  #sideToggle { position:absolute; top:6px; right:22px; z-index:5; font-size:13px; padding:1px 9px; opacity:.75; } #sideToggle:hover { opacity:1; }
+  body.noside aside { display:none; }
   #log { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
   .msg { max-width:80%; padding:8px 12px; border-radius:var(--radius); white-space:pre-wrap; word-wrap:break-word; }
   .msg.md { white-space:normal; }
@@ -48,6 +50,7 @@
   .md pre { margin:8px 0; } .md pre code { background:none; padding:0; }
   .md blockquote { margin:6px 0; padding:2px 12px; border-left:3px solid var(--line); color:var(--muted); }
   .md table { margin:8px 0; display:block; overflow-x:auto; } .md th { background:var(--code-bg); }
+  .docactions { display:flex; gap:6px; margin-top:8px; opacity:.55; } .docactions:hover { opacity:1; } .docactions button { font-size:11px; padding:1px 8px; }
   .md hr { border:0; border-top:1px solid var(--line); margin:10px 0; } .md a { color:var(--accent); }
   .user { align-self:flex-end; background:var(--user-bg); }
   .assistant { align-self:flex-start; background:var(--panel); border:1px solid var(--line); }
@@ -122,10 +125,10 @@
   #welcome h2 { margin:0 0 4px; color:var(--text); font-size:20px; } #welcome p { margin:4px 0 14px; }
   #welcome .chips { display:flex; flex-direction:column; gap:8px; } #welcome .chips button { text-align:left; color:var(--text); }
   body { text-shadow:var(--glow); }
-  dialog#jsonDlg { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:var(--radius); padding:18px 20px; width:min(640px, 92vw); }
-  dialog#jsonDlg::backdrop { background:rgba(0,0,0,.55); } dialog#jsonDlg h3 { margin:0 0 6px; text-transform:none; letter-spacing:0; font-size:16px; color:var(--text); }
-  dialog#jsonDlg label { display:block; margin:10px 0 0; font-size:12px; color:var(--muted); } dialog#jsonDlg input, dialog#jsonDlg select { width:100%; margin-top:3px; }
-  dialog#jsonDlg .hint { font-size:12px; color:var(--muted); margin:4px 0 0; } #jInfo { margin-top:10px; font-size:12px; } #jInfo .tblwrap { max-height:180px; }
+  dialog#jsonDlg, dialog#pkgDlg { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:var(--radius); padding:18px 20px; width:min(640px, 92vw); }
+  dialog#jsonDlg::backdrop, dialog#pkgDlg::backdrop { background:rgba(0,0,0,.55); } dialog#jsonDlg h3, dialog#pkgDlg h3 { margin:0 0 6px; text-transform:none; letter-spacing:0; font-size:16px; color:var(--text); }
+  dialog#jsonDlg label, dialog#pkgDlg label { display:block; margin:10px 0 0; font-size:12px; color:var(--muted); } dialog#jsonDlg input, dialog#jsonDlg select, dialog#pkgDlg input { width:100%; margin-top:3px; }
+  dialog#jsonDlg .hint, dialog#pkgDlg .hint { font-size:12px; color:var(--muted); margin:4px 0 0; } #jInfo { margin-top:10px; font-size:12px; } #jInfo .tblwrap { max-height:180px; }
   #jProg { width:100%; margin-top:12px; accent-color:var(--accent); } #jStatus { font-size:12px; margin-top:6px; min-height:1.4em; } #jStatus.err { color:var(--bad); }
   #attachments { display:none; flex-wrap:wrap; gap:8px; padding:8px 16px 0; } #attachments.on { display:flex; }
   .thumb { position:relative; } .thumb img { height:56px; max-width:120px; object-fit:cover; border:1px solid var(--line); border-radius:var(--radius-sm); display:block; }
@@ -171,6 +174,7 @@
 <div id="uiwarn" title="Problems found in ui.json"></div>
 <main>
   <section id="chat">
+    <button id="sideToggle" type="button"></button>
     <div id="log"></div>
     <div id="attachments"></div>
     <form id="form">
@@ -190,6 +194,19 @@
     <div class="pane" id="database"></div>
   </aside>
 </main>
+<dialog id="pkgDlg">
+  <h3>Export a package</h3>
+  <p class="hint" id="pkWhat"></p>
+  <label>Package name<input id="pkName" autocomplete="off" spellcheck="false" placeholder="my-security-tools"></label>
+  <label>Version<input id="pkVersion" autocomplete="off" spellcheck="false" placeholder="1.0.0"></label>
+  <label>Description (optional)<input id="pkDesc" autocomplete="off" maxlength="300"></label>
+  <label>Author (optional)<input id="pkAuthor" autocomplete="off" maxlength="80"></label>
+  <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="pkSign" checked style="width:auto;margin:0"> Sign with this installation's key</label>
+  <p class="hint" id="pkSignHint"></p>
+  <p class="hint">Secrets are never included. The package only lists which environment variables its tools need.</p>
+  <div id="pkError" class="msg warning" hidden></div>
+  <div class="row"><button class="primary" id="pkGo">Export</button><button id="pkCancel">Cancel</button></div>
+</dialog>
 <dialog id="jsonDlg">
   <h3>Import a large file (CSV or JSON)</h3>
   <p class="hint">Reads the file straight from this computer (nothing is uploaded), so files of hundreds of MB are fine.
@@ -209,6 +226,7 @@
 <script>
 const TOKEN = "__TOKEN__";
 const $ = s => document.querySelector(s);
+let sideLeft = false;  // set from ui.json's sidebar.position
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
 let sessionId = null, cfg = null, busy = false;
 
@@ -221,6 +239,7 @@ function inline(t) {
     .replace(/\*\*([^*]+)\*\*|__([^_]+)__/g, (_, a, b) => "<strong>" + (a || b) + "</strong>")
     .replace(/(^|[^*\w])\*([^*\s][^*]*)\*(?!\w)/g, "$1<em>$2</em>")
     .replace(/~~([^~]+)~~/g, "<del>$1</del>")
+    .replace(/&lt;br\s*\/?&gt;/gi, "<br>")  // models write <br> for line breaks (mostly inside table cells); it was escaped and shown literally
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
   return t.replace(/\u0000(\d+)\u0000/g, (_, i) => "<code>" + esc(codes[i]) + "</code>");
 }
@@ -278,7 +297,35 @@ function renderMarkdown(src) {
   }
   return out.join("");
 }
-function mdNode(text) { const d = el("div", "msg assistant md"); d.innerHTML = renderMarkdown(text); return d; }
+function mdNode(text) {
+  const d = el("div", "msg assistant md"); d.innerHTML = renderMarkdown(text);
+  const bar = el("div", "docactions"), md = el("button", "", "⬇ .md"), html = el("button", "", "⬇ .html");
+  md.type = html.type = "button";
+  md.title = "Save this answer as a Markdown file (plain text, keeps the formatting marks)";
+  html.title = "Save this answer as a formatted web page: opens in a browser, Word or Pages, and prints to PDF";
+  md.onclick = () => saveBlob(new Blob([text.endsWith("\n") ? text : text + "\n"], { type: "text/markdown;charset=utf-8" }), stampName("md"));
+  html.onclick = () => saveBlob(new Blob([answerHtml(text)], { type: "text/html;charset=utf-8" }), stampName("html"));
+  bar.append(md, html); d.append(bar); return d;
+}
+function stampName(ext) {
+  const d = new Date(), p = n => String(n).padStart(2, "0");
+  return `openjanus-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.${ext}`;
+}
+function saveBlob(blob, name) {
+  const a = el("a"); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+function answerHtml(text) {  // self-contained and theme-independent (light, print friendly), so it looks right wherever it is opened
+  const title = esc((text.split("\n").find(l => l.trim()) || "OpenJanus answer").replace(/^[#>*\s-]+/, "").replace(/[*_`]/g, "").slice(0, 80));
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title><style>
+body{font:14px/1.55 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif;max-width:860px;margin:32px auto;padding:0 20px;color:#1f2328}
+h1,h2,h3,h4{line-height:1.3;margin:20px 0 8px}code,pre{font-family:ui-monospace,Menlo,Consolas,monospace}
+code{background:#f0f2f4;border-radius:4px;padding:1px 5px;font-size:12.5px}pre{background:#f0f2f4;border-radius:6px;padding:10px 12px;overflow-x:auto;white-space:pre-wrap}
+pre code{background:none;padding:0}table{border-collapse:collapse;margin:10px 0}th,td{border:1px solid #cfd4d9;padding:5px 10px;text-align:left;vertical-align:top}th{background:#eef0f2}
+blockquote{margin:8px 0;padding:2px 14px;border-left:3px solid #cfd4d9;color:#57606a}hr{border:0;border-top:1px solid #d0d7de}a{color:#0969da}
+footer{margin-top:32px;font-size:11px;color:#6e7781}
+</style></head><body>${renderMarkdown(text)}<footer>Exported from OpenJanus on ${new Date().toLocaleString()}</footer></body></html>`;
+}
 
 // The token changes whenever the server restarts. A page opened before that (or restored by the browser) holds a dead
 // token, so reload to get a fresh one, keeping whatever the user was typing/sending.
@@ -336,6 +383,7 @@ function applyUi(res) {
   const sb = c.sidebar || {}, tabs = sb.tabs || ["approvals", "capabilities", "database"], aside = $("aside");
   aside.style.width = sb.width ? sb.width + "px" : "";
   aside.style.order = sb.position === "left" ? -1 : "";
+  sideLeft = sb.position === "left"; placeSideToggle();
   aside.style.borderLeft = sb.position === "left" ? "0" : ""; aside.style.borderRight = sb.position === "left" ? "1px solid var(--line)" : "";
   document.querySelectorAll(".tabs button").forEach(b => {
     const i = tabs.indexOf(b.dataset.tab); b.style.display = i < 0 ? "none" : ""; b.style.order = i;
@@ -587,12 +635,7 @@ function csvCell(v) {
   return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 const toCsv = t => "﻿" + [t.columns, ...t.rows].map(r => r.map(csvCell).join(",")).join("\r\n") + "\r\n";  // BOM: Excel reads UTF-8
-function downloadCsv(t) {
-  const a = el("a"), d = new Date(), p = n => String(n).padStart(2, "0");
-  a.href = URL.createObjectURL(new Blob([toCsv(t)], { type: "text/csv;charset=utf-8" }));
-  a.download = `openjanus-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.csv`;
-  document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-}
+function downloadCsv(t) { saveBlob(new Blob([toCsv(t)], { type: "text/csv;charset=utf-8" }), stampName("csv")); }
 
 const SVGNS = "http://www.w3.org/2000/svg", SERIES_COLORS = ["var(--s1)", "var(--s2)", "var(--s3)", "var(--s4)"];
 const sv = (tag, attrs = {}, text) => { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text !== undefined) e.textContent = text; return e; };
@@ -882,6 +925,13 @@ function itemCard(it, pending) {
   const key = `${it.status}:${it.kind}:${it.name}`;
   const head = [el("h4", "", `${it.kind === "tool" ? "🔧" : "📘"} ${it.name}`)];
   if (pending && it.replaces_approved) head.push(el("span", "badge pending", "⟳ replaces approved"));
+  if (it.package) {
+    head.push(el("span", "badge", `📦 ${it.package.name} ${it.package.version}`));
+    const pk = it.package, sig = pk.signer ? (pk.signer_trusted ? `✔ ${pk.signer_label}` : `⚠ unknown signer ${pk.signer}`) : "⚠ unsigned";
+    const b = el("span", "badge " + (pk.signer_trusted ? "" : "database-write"), sig);
+    b.title = `Package file fingerprint: ${pk.fingerprint || "?"}` + (pk.signer ? `\nSigner key: ${pk.signer}` : "");
+    head.push(b);
+  }
   for (const cap of it.capabilities || []) if (cap === "network" || cap === "database-write" || cap.startsWith("secret:")) head.push(el("span", "badge " + (cap.startsWith("secret:") ? "network" : cap), cap.startsWith("secret:") ? "🔑 " + cap.slice(7) : cap));
   const body = [el("p", "", it.description || "")];
   if (it.rationale) body.push(el("p", "", "Why: " + it.rationale));
@@ -922,13 +972,16 @@ function itemCard(it, pending) {
     row.append(gone);
     const exp = el("button", "", "Export");
     exp.title = "Download as a .janus package to share (a skill includes the tools it uses)";
-    exp.onclick = () => downloadPackage(`${it.kind}:${it.name}`);
+    exp.onclick = () => downloadPackage(`${it.kind}:${it.name}`, `Exporting ${it.kind} "${it.name}" (a skill also brings the generated tools it uses).`, it.name.replace(/_/g, "-"));
     row.append(exp);
   }
   if (pending) {
     const ok = el("button", "primary", "Approve"), no = el("button", "danger", "Reject");
     const act = a => async () => {
-      if (a === "approve" && !confirm(`Approve ${it.kind} "${it.name}"?\n\n` + (it.replaces_approved
+      const from = it.package ? `Imported from package ${it.package.name} ${it.package.version} (file fingerprint ${it.package.fingerprint || "?"}).\n`
+        + (it.package.signer ? (it.package.signer_trusted ? `Signed by trusted publisher ${it.package.signer_label}.` : `Signed by UNKNOWN key ${it.package.signer}.`) : "NOT signed.")
+        + "\nRead the source first: you are approving code written by someone else.\n\n" : "";
+      if (a === "approve" && !confirm(`Approve ${it.kind} "${it.name}"?\n\n` + from + (it.replaces_approved
           ? `This REPLACES the currently approved ${it.kind} of the same name (the old version is archived).\n\n` : "") +
           `Once approved it becomes available to the agent` + (it.kind === "tool" ? " and its code will run on this machine." : "."))) return;
       try { await api(`/api/extensions/${it.kind}/${it.name}/${a}`, { method: "POST" }); } catch (e) { alert(e.message); }
@@ -1016,9 +1069,43 @@ async function refreshCaps() {
   capData = await (await api("/api/capabilities")).json(); drawCaps();
 }
 
-function downloadPackage(items) {
-  const a = document.createElement("a"); a.href = "/api/extensions/export" + (items ? "?items=" + encodeURIComponent(items) : "");
-  document.body.append(a); a.click(); a.remove();
+function placeSideToggle() {
+  const t = $("#sideToggle"), closed = document.body.classList.contains("noside");
+  t.style.left = sideLeft ? "22px" : ""; t.style.right = sideLeft ? "auto" : "22px";
+  t.textContent = (sideLeft ? !closed : closed) ? "«" : "»";  // the arrow points where the panel will go / come from
+  t.title = closed ? "Show the side panel (Approvals, Capabilities, Database)" : "Hide the side panel to give the chat the full width";
+}
+$("#sideToggle").onclick = () => {
+  localStorage.sideClosed = document.body.classList.toggle("noside") ? "1" : "";
+  placeSideToggle();
+};
+if (localStorage.sideClosed) document.body.classList.add("noside");
+placeSideToggle();
+
+function downloadPackage(items, what, defName) {
+  const dlg = $("#pkgDlg"), q = new URLSearchParams(), last = JSON.parse(localStorage.getItem("pkgInfo") || "{}");
+  $("#pkWhat").textContent = what; $("#pkName").value = defName; $("#pkVersion").value = "1.0.0";
+  $("#pkDesc").value = ""; $("#pkAuthor").value = last.author || ""; $("#pkError").hidden = true;
+  $("#pkCancel").onclick = () => dlg.close();
+  $("#pkSignHint").textContent = "";
+  fetch("/api/publishers").then(r => r.json()).then(d => {
+    $("#pkSignHint").textContent = d.own
+      ? `Your fingerprint: ${d.own}. Tell your teammates this value (not by attaching it to the package) so they can recognise your packages.`
+      : "A signing key is created on first use and stays on this computer. A signature shows the package was not changed and who signed it; it does not make the code safe.";
+  }).catch(() => {});
+  $("#pkGo").onclick = async () => {
+    q.set("name", $("#pkName").value.trim()); q.set("version", $("#pkVersion").value.trim());
+    q.set("description", $("#pkDesc").value.trim()); q.set("author", $("#pkAuthor").value.trim());
+    if (items) q.set("items", items);
+    if ($("#pkSign").checked) q.set("sign", "1");
+    const r = await fetch("/api/extensions/export?" + q);  // validate first so an error shows here instead of a broken download
+    if (!r.ok) { const e = $("#pkError"); e.textContent = (await r.json().catch(() => ({}))).detail || r.statusText; e.hidden = false; return; }
+    localStorage.setItem("pkgInfo", JSON.stringify({ author: $("#pkAuthor").value.trim() }));
+    const a = document.createElement("a"), url = URL.createObjectURL(await r.blob());
+    a.href = url; a.download = /filename="([^"]+)"/.exec(r.headers.get("Content-Disposition") || "")?.[1] || "package.janus";
+    document.body.append(a); a.click(); a.remove(); URL.revokeObjectURL(url); dlg.close();
+  };
+  dlg.showModal();
 }
 
 function packageBar() {
@@ -1027,14 +1114,25 @@ function packageBar() {
   const imp = el("button", "", "Import package"), exp = el("button", "", "Export all approved");
   imp.title = "Install tools/skills from a .janus file. They arrive as pending: nothing is used until you approve it.";
   imp.onclick = () => file.click();
-  exp.onclick = () => downloadPackage("");
+  exp.onclick = () => downloadPackage("", "Exporting every approved tool and skill.", "openjanus-extensions");
   file.onchange = async () => {
     const f = file.files[0]; file.value = ""; if (!f) return;
     try {
       const r = await (await api("/api/extensions/import", { method: "POST", body: f, headers: { "Content-Type": "application/octet-stream" } })).json();
-      let m = `Imported ${r.imported.length} item(s) as PENDING. Review them below before approving.`;
+      const pk = r.package || {};
+      let m = `Package: ${pk.name || "?"} ${pk.version || ""}` + (pk.author ? ` by ${pk.author}` : "") + (pk.description ? `\n${pk.description}` : "")
+        + `\nFingerprint: ${r.fingerprint}  (compare with the sender if you want to be sure it is the same file)`
+        + `\n\nImported ${r.imported.length} item(s) as PENDING. Review them below before approving.`;
+      if ((r.requires_secrets || []).length) m += "\n\nNeeds these secrets in your .env:\n" + r.requires_secrets.map(x =>
+        `- ${x.name} (sent only to ${x.hosts.join(", ")}) ` + (x.configured ? "- already set" : "- NOT set yet")).join("\n");
+      m += "\n\n" + (r.signer ? (r.signer.trusted ? `✔ Signed by a trusted publisher: ${r.signer.label} (${r.signer.fingerprint}).`
+        : `Signed by an UNKNOWN publisher (key ${r.signer.fingerprint}). The signature only proves the package is unchanged.`) : "⚠ Not signed: nothing proves who made it.");
       if (r.skipped.length) m += "\n\nSkipped:\n" + r.skipped.map(s => `- ${s.kind || "?"} ${s.name || "?"}: ${s.reason}`).join("\n");
       alert(m);
+      if (r.signer && !r.signer.trusted && r.imported.length && confirm(`Trust publisher ${r.signer.fingerprint} for future imports?\n\nOnly say yes if the sender gave you this exact fingerprint through another channel (chat, phone, in person).`)) {
+        const label = prompt("A name for this publisher:", pk.author || "");
+        if (label) await api("/api/publishers/trust", { method: "POST", body: JSON.stringify({ fingerprint: r.signer.fingerprint, label }) });
+      }
     } catch (e) { alert("Import failed: " + e.message); }
     refreshApprovals(); refreshCaps();
   };

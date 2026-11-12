@@ -30,6 +30,36 @@ class ToolContext:
         self.http = http
 
 
+class _Narrow:
+    """A read-only view exposing exactly the named methods of `target` and nothing else (no `.path`, no `.scoped`, no internals).
+
+    The lint already rejects aliases and private attributes, but this is the control that does not depend on spotting a pattern in
+    source code: even a tool that got past the lint can only call what is listed here."""
+    __slots__ = ("_names", "_get")
+
+    def __init__(self, target: Any, names: frozenset[str]):
+        object.__setattr__(self, "_names", names)
+        object.__setattr__(self, "_get", lambda n: getattr(target, n))
+
+    def __getattr__(self, name: str) -> Any:
+        if name not in self._names:
+            raise AttributeError(f"ctx has no '{name}'. Allowed: {', '.join(sorted(self._names))}")
+        return self._get(name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("ctx is read-only")
+
+
+DB_METHODS = frozenset({"query", "describe", "list_tables", "table_names", "get_spec", "all_specs", "export_models",
+                        "profile_table", "find_relationships", "insert", "update", "delete", "define_model"})
+HTTP_METHODS = frozenset({"get", "post"})
+
+
+def restricted_context(db: "Database", http: "SafeHttp") -> ToolContext:
+    """What a GENERATED tool receives: the database and HTTP client narrowed to their documented methods."""
+    return ToolContext(_Narrow(db, DB_METHODS), _Narrow(http, HTTP_METHODS))  # type: ignore[arg-type]
+
+
 class AgentContext(ToolContext):
     """Extra capabilities available to trusted built-in tools only."""
 
