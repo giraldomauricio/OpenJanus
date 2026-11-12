@@ -50,6 +50,7 @@
   .md pre { margin:8px 0; } .md pre code { background:none; padding:0; }
   .md blockquote { margin:6px 0; padding:2px 12px; border-left:3px solid var(--line); color:var(--muted); }
   .md table { margin:8px 0; display:block; overflow-x:auto; } .md th { background:var(--code-bg); }
+  .usage { align-self:flex-start; font-size:11px; color:var(--muted); margin:-4px 0 0 4px; opacity:.8; }
   .docactions { display:flex; gap:6px; margin-top:8px; opacity:.55; } .docactions:hover { opacity:1; } .docactions button { font-size:11px; padding:1px 8px; }
   .md hr { border:0; border-top:1px solid var(--line); margin:10px 0; } .md a { color:var(--accent); }
   .user { align-self:flex-end; background:var(--user-bg); }
@@ -296,6 +297,14 @@ function renderMarkdown(src) {
     }
   }
   return out.join("");
+}
+const fmtTok = n => n >= 10000 ? (n / 1000).toFixed(1) + "k" : n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, "") + "k" : String(n);
+function usageNode(u) {  // one muted line per question: what it cost in tokens and how much the provider's cache saved
+  const parts = [`${fmtTok(u.input)} in` + (u.cache_read ? ` (${fmtTok(u.cache_read)} from cache, ${Math.round(100 * u.cache_read / Math.max(u.input, 1))}%)` : ""),
+                 `${fmtTok(u.output)} out`, `${u.calls} model call${u.calls === 1 ? "" : "s"}`, `${u.seconds}s`];
+  const d = el("div", "usage", "↳ " + parts.join(" · "));
+  d.title = "Tokens for this question across all its model calls. “From cache” is the part the provider served from its prompt cache (billed far lower on Claude); it is only shown when the provider reports it.";
+  return d;
 }
 function mdNode(text) {
   const d = el("div", "msg assistant md"); d.innerHTML = renderMarkdown(text);
@@ -765,6 +774,7 @@ function handle(ev, tools) {
   else if (ev.type === "text") { finishStream(ev.text); setWorking(`Waiting for ${$("#model").value.trim() || $("#provider").value}…`); }
   else if (ev.type === "error") { finishStream(); add(el("div", "msg error", ev.text)); }
   else if (ev.type === "warning") add(el("div", "msg warning", "⚠ " + ev.text));
+  else if (ev.type === "usage") add(usageNode(ev));
   else if (ev.type === "tool_call") { tools[ev.id] = add(toolNode(ev)); setWorking(`Running ${ev.name}…`); }
   else if (ev.type === "tool_result") {
     setWorking(`Waiting for ${$("#model").value.trim() || $("#provider").value}…`);

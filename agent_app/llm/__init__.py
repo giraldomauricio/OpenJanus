@@ -5,7 +5,7 @@ import os
 import httpx
 
 from .. import config
-from .base import LLMProvider, ToolCall, ToolDef, Turn
+from .base import LLMProvider, ToolCall, ToolDef, Turn, Usage
 
 PROVIDERS = ("claude", "gemini", "ollama")
 
@@ -41,4 +41,4 @@ def ollama_models() -> list[str]:
         return []
 
 
-__all__ = ["LLMProvider", "ToolCall", "ToolDef", "Turn", "make_provider", "provider_status", "ollama_models"]
+__all__ = ["LLMProvider", "ToolCall", "ToolDef", "Turn", "Usage", "make_provider", "provider_status", "ollama_models"]

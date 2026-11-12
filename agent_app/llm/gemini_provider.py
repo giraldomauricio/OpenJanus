@@ -5,7 +5,7 @@ import uuid
 from typing import Any, Iterator
 
 from .. import images
-from .base import LLMProvider, ToolCall, ToolDef, Turn, collect
+from .base import LLMProvider, ToolCall, ToolDef, Turn, Usage, collect
 
 
 class GeminiProvider(LLMProvider):
@@ -44,6 +44,13 @@ class GeminiProvider(LLMProvider):
                 ]))
         return out
 
+    @staticmethod
+    def _usage(m: Any) -> Usage:
+        """prompt_token_count already includes the part Gemini served from its automatic (implicit) cache."""
+        return Usage(getattr(m, "prompt_token_count", 0) or 0,
+                     (getattr(m, "candidates_token_count", 0) or 0) + (getattr(m, "thoughts_token_count", 0) or 0),
+                     getattr(m, "cached_content_token_count", None) or 0, None)
+
     def generate(self, system: str, messages: list[dict[str, Any]], tools: list[ToolDef]) -> Turn:
         return collect(self.stream(system, messages, tools))
 
@@ -57,8 +64,10 @@ class GeminiProvider(LLMProvider):
             ])],
             automatic_function_calling=t.AutomaticFunctionCallingConfig(disable=True),
         )
-        turn, parts = Turn(), []
+        turn, parts, meta = Turn(), [], None
         for chunk in self.client.models.generate_content_stream(model=self.model, contents=self._convert(messages), config=config):
+            if getattr(chunk, "usage_metadata", None):
+                meta = chunk.usage_metadata  # cumulative: the last one wins
             if not chunk.candidates or not chunk.candidates[0].content:
                 continue
             for p in chunk.candidates[0].content.parts or []:
@@ -71,4 +80,6 @@ class GeminiProvider(LLMProvider):
                     yield p.text
         if parts:
             turn.raw = t.Content(role="model", parts=parts)
+        if meta is not None:
+            turn.usage = self._usage(meta)
         yield turn

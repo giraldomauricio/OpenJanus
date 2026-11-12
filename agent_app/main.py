@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import json
+import logging
 import re
 import secrets
 import threading
@@ -15,6 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingRes
 from pydantic import BaseModel, Field
 
 from . import config, images
+from . import log as applog
 from .agent import Agent, Session
 from .db import Database
 from .db import file_import
@@ -28,6 +31,10 @@ from .skills import SkillStore
 from .ui_config import load_ui_config
 from . import tools as _tools  # noqa: F401
 
+log = logging.getLogger("openjanus.app")
+log_sec = logging.getLogger("openjanus.security")
+log_ext = logging.getLogger("openjanus.ext")
+log_imp = logging.getLogger("openjanus.import")
 config.DATA_DIR.mkdir(parents=True, exist_ok=True)
 db = Database(config.DB_PATH)
 skills_store: SkillStore
@@ -46,12 +53,32 @@ agent.usage = store.tool_usage
 # website in the same browser (or an approved tool, which cannot reach localhost) cannot approve anything.
 TOKEN = secrets.token_urlsafe(32)
 
-app = FastAPI(title="OpenJanus")
+@contextlib.asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Logging is switched on when the server starts (not on import), then a one-screen summary of what is running."""
+    applog.setup()
+    ok = {n: v["configured"] for n, v in provider_status().items()}
+    tools_, problems = agent.build_tools()
+    log.info("OpenJanus %s starting. data=%s log_level=%s log_file=%s", app_version() or "?", config.DATA_DIR, config.LOG_LEVEL,
+             (config.LOG_DIR / "openjanus.log") if config.LOG_FILE_ENABLED else "off")
+    log.info("providers configured: %s | prompt_cache=%s | diagrams=%s", ", ".join(f"{n}={'yes' if v else 'no'}" for n, v in ok.items()),
+             "on" if config.PROMPT_CACHE else "off", "on" if config.DIAGRAMS_ENABLED else "off")
+    log.info("tools: %d built-in, %d approved | skills: %d | pending approval: %d", len(BUILTIN_TOOLS), len(tools_) - len(BUILTIN_TOOLS),
+             len(skills_store.all()), len(extensions.list_items("pending")))
+    for p in problems:
+        log.warning("integrity: %s", p)
+    yield
+    log.info("OpenJanus stopping")
+
+
+app = FastAPI(title="OpenJanus", lifespan=lifespan)
 INDEX = (Path(__file__).parent / "static" / "index.html").read_text()
 
 
-def require_token(x_agent_token: str = Header(default="")) -> None:
+def require_token(request: Request, x_agent_token: str = Header(default="")) -> None:
     if not secrets.compare_digest(x_agent_token, TOKEN):
+        log_sec.warning("403 %s %s from %s: missing or invalid token", request.method, request.url.path,
+                        request.client.host if request.client else "?")
         raise HTTPException(403, "Missing or invalid token")
 
 
@@ -133,7 +160,9 @@ def delete_session(sid: str) -> dict[str, bool]:
     if s is not None and s.lock.locked():
         raise HTTPException(409, "This session is running a request")
     sessions.pop(sid, None)
-    return {"deleted": store.delete(sid)}
+    deleted = store.delete(sid)
+    log.info("[%s] chat deleted=%s", applog.short(sid), deleted)
+    return {"deleted": deleted}
 
 
 class RenameRequest(BaseModel):
@@ -159,6 +188,7 @@ def stop_session(sid: str) -> dict[str, bool]:
         raise HTTPException(404, "Unknown session")
     running = s.lock.locked()
     if running:
+        log.info("[%s] stop requested", applog.short(sid))
         s.cancel.set()
     return {"stopping": running}
 
@@ -181,6 +211,7 @@ def chat(req: ChatRequest) -> StreamingResponse:
     if any(images.load(i) is None for i in req.images):
         raise HTTPException(400, "An attached image is missing: upload it again")
     if not session.lock.acquire(blocking=False):
+        log.warning("[%s] refused: this session is already running a request", applog.short(session.id))
         raise HTTPException(409, "This session is already running a request")
 
     def sse(ev: dict[str, Any]) -> str:
@@ -191,6 +222,7 @@ def chat(req: ChatRequest) -> StreamingResponse:
             try:
                 provider = make_provider(req.provider, req.model or None)
             except Exception as e:
+                log.error("[%s] could not start %s: %s: %s", applog.short(session.id), req.provider, type(e).__name__, applog.clip(e, 300))
                 yield sse({"type": "error", "text": f"Could not start {req.provider}: {e}"})
                 return
             if not session.title:
@@ -234,7 +266,11 @@ def export_extensions(items: str = "", name: str = "", version: str = "", descri
         data, result = extensions.export_package(wanted, {"name": name, "version": version,  # type: ignore[arg-type]
                                                            "description": description, "author": author}, sign)
     except (PackageError, ValueError) as e:
+        log_ext.warning("export refused: %s", applog.clip(e, 300))
         raise HTTPException(400, str(e)) from e
+    pk = result["package"]
+    log_ext.info("exported package %s %s: %d item(s), %s", pk["name"], pk["version"], len(result["items"]),
+                 f"signed by {pk['signed_by']}" if pk.get("signed_by") else "unsigned")
     fname = f"{result['package']['name']}-{result['package']['version']}.janus"
     return Response(data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
@@ -255,7 +291,9 @@ def trust_publisher(req: TrustRequest) -> dict:
     try:
         extensions.signer.trust(req.fingerprint.strip().lower(), req.label)
     except SignatureError as e:
+        log_sec.warning("trust publisher refused: %s", e)
         raise HTTPException(400, str(e)) from e
+    log_sec.info("publisher %s is now trusted as %r", req.fingerprint.strip().lower(), req.label[:60])
     return {"trusted": extensions.signer.trusted()}
 
 
@@ -264,9 +302,17 @@ async def import_extensions(request: Request) -> dict:
     """Raw package bytes in the body. Everything lands in PENDING; nothing is approved here."""
     raw = await request.body()
     try:
-        return await run_in_threadpool(extensions.import_package, raw)
+        r = await run_in_threadpool(extensions.import_package, raw)
     except PackageError as e:
+        log_ext.warning("package import refused: %s", applog.clip(e, 300))
         raise HTTPException(400, str(e)) from e
+    pk, sg = r["package"], r["signer"]
+    log_ext.info("imported package %s %s (file %s): %d pending, %d skipped; %s", pk.get("name"), pk.get("version"), r["fingerprint"],
+                 len(r["imported"]), len(r["skipped"]),
+                 "unsigned" if not sg else f"signed by {sg['fingerprint']} ({'trusted: ' + str(sg['label']) if sg['trusted'] else 'UNKNOWN signer'})")
+    for sk in r["skipped"]:
+        log_ext.warning("  skipped %s %s: %s", sk.get("kind"), sk.get("name"), applog.clip(sk.get("reason"), 200))
+    return r
 
 
 @app.get("/api/extensions/{kind}/{name}/source")
@@ -280,10 +326,14 @@ def extension_source(kind: Literal["tool", "skill"], name: str, status: Literal[
 @app.post("/api/extensions/{kind}/{name}/{action}", dependencies=[Depends(require_token)])
 def review(kind: Literal["tool", "skill"], name: str, action: Literal["approve", "reject", "retire"]) -> dict:
     try:
-        return {"approve": extensions.approve, "reject": extensions.reject, "retire": extensions.retire}[action](kind, name)
+        out = {"approve": extensions.approve, "reject": extensions.reject, "retire": extensions.retire}[action](kind, name)
+        log_ext.info("%s %s %s%s", action, kind, name, " (replaced the previous version)" if out.get("replaced") else "")
+        return out
     except KeyError as e:
+        log_ext.warning("%s %s %s: %s", action, kind, name, e)
         raise HTTPException(404, str(e)) from e
     except ProposalError as e:
+        log_ext.warning("%s %s %s refused: %s", action, kind, name, applog.clip(e, 300))
         raise HTTPException(400, str(e)) from e
 
 
@@ -338,9 +388,12 @@ async def import_csv_endpoint(request: Request, table: str) -> dict[str, Any]:
     if len(raw) > 20_000_000:
         raise HTTPException(413, "File too large (20 MB max)")
     try:
-        return await run_in_threadpool(import_csv, db, raw, table)
+        r = await run_in_threadpool(import_csv, db, raw, table)
     except ValueError as e:
+        log_imp.warning("CSV import into %s refused: %s", table, applog.clip(e, 300))
         raise HTTPException(400, str(e)) from e
+    log_imp.info("CSV imported into table %s (%d bytes)", table, len(raw))
+    return r
 
 
 if config.DIAGRAMS_ENABLED:  # optional feature pack: draw.io files (tools in agent_app/tools/diagrams.py)
@@ -442,16 +495,22 @@ def _run_import(job: ImportJob, path: Any, records_key: str | None) -> None:
     def progress(phase: str, rows: int, read: int, total: int) -> None:
         job.phase, job.rows, job.bytes_read, job.total = phase, rows, read, total
 
+    t0 = time.monotonic()
+    log_imp.info("[job %s] importing %s into table %s (mode=%s)", job.id[:6], Path(str(path)).name, job.table, job.mode)
     try:
         job.result = file_import.load(db, path, job.table, job.mode, records_key, progress, job.cancel.is_set)
         job.phase = "done"
         job.rows = job.result["rows"]
+        log_imp.info("[job %s] done: %d rows in %.1fs", job.id[:6], job.rows, time.monotonic() - t0)
     except file_import.Cancelled:
         job.phase = "cancelled"
+        log_imp.info("[job %s] cancelled after %d rows", job.id[:6], job.rows)
     except file_import.ImportFileError as e:
         job.phase, job.error = "error", str(e)
+        log_imp.warning("[job %s] failed: %s", job.id[:6], applog.clip(e, 300))
     except Exception as e:  # never leave a job stuck in "running"
         job.phase, job.error = "error", f"{type(e).__name__}: {e}"
+        log_imp.error("[job %s] crashed: %s", job.id[:6], applog.clip(job.error, 300))
 
 
 @app.post("/api/import/file", dependencies=[Depends(require_token)])

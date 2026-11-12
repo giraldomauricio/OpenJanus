@@ -42,5 +42,14 @@ ANTHROPIC_BASE_URL = os.getenv("OPENJANUS_ANTHROPIC_BASE_URL") or "https://api.a
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
 
+# Prompt caching: Claude gets an explicit cache marker; Gemini and Ollama reuse an identical request prefix on their own. Set to 0 to
+# stop sending the marker (e.g. behind a gateway that rejects it).
+PROMPT_CACHE = os.getenv("OPENJANUS_PROMPT_CACHE", "1").strip().lower() not in ("0", "false", "no", "off")
+
+# Logging (see agent_app/log.py): console + a rotating file. Levels: INFO (default), DEBUG (adds tool arguments, truncated).
+LOG_LEVEL = os.getenv("OPENJANUS_LOG_LEVEL", "INFO").strip().upper()
+LOG_FILE_ENABLED = os.getenv("OPENJANUS_LOG_FILE", "1").strip().lower() not in ("0", "false", "no", "off")
+LOG_DIR = DATA_DIR / "logs"
+
 MAX_STEPS = 12  # max LLM round-trips per user message
 MAX_TOOL_RESULT_CHARS = 20_000

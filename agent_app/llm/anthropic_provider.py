@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Iterator
 
-from .. import images
-from .base import LLMProvider, ToolCall, ToolDef, Turn, collect
+from .. import config, images
+from .base import LLMProvider, ToolCall, ToolDef, Turn, Usage, collect
 
 
 class AnthropicProvider(LLMProvider):
@@ -14,8 +14,6 @@ class AnthropicProvider(LLMProvider):
         import os
 
         import anthropic
-
-        from .. import config
 
         key = os.getenv("ANTHROPIC_API_KEY")
         if not key:
@@ -48,6 +46,12 @@ class AnthropicProvider(LLMProvider):
                 ]})
         return out
 
+    @staticmethod
+    def _usage(u: Any) -> Usage:
+        """The API reports uncached input separately from cache reads/writes; fold them into one whole-prompt figure."""
+        read, write = getattr(u, "cache_read_input_tokens", None) or 0, getattr(u, "cache_creation_input_tokens", None) or 0
+        return Usage((u.input_tokens or 0) + read + write, u.output_tokens or 0, read, write)
+
     def generate(self, system: str, messages: list[dict[str, Any]], tools: list[ToolDef]) -> Turn:
         return collect(self.stream(system, messages, tools))
 
@@ -58,10 +62,13 @@ class AnthropicProvider(LLMProvider):
             system=system,
             messages=self._convert(messages),
             tools=[{"name": t.name, "description": t.description, "input_schema": t.schema} for t in tools],
+            # Prompt caching: one marker on the request caches the stable prefix (tools + system) and the growing conversation, so
+            # each step of a tool loop re-reads them at a fraction of the price instead of paying full input rates again.
+            **({"cache_control": {"type": "ephemeral"}} if config.PROMPT_CACHE else {}),
         ) as s:
             yield from s.text_stream
             final = s.get_final_message()
-        turn = Turn()
+        turn = Turn(usage=self._usage(final.usage) if getattr(final, "usage", None) else None)
         for b in final.content:
             if b.type == "text":
                 turn.text += b.text

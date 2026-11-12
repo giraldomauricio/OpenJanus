@@ -13,16 +13,19 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import logging
 import socket
+import time
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
 from .tool_secrets import SecretResolver
 
 MAX_BYTES = 2_000_000
+log = logging.getLogger("openjanus.http")
 
 
 class BlockedURL(ValueError):
@@ -46,6 +49,7 @@ def resolve_public(host: str, port: int) -> str:
         raise BlockedURL(f"Cannot resolve {host}: {e}") from e
     ips = [i[4][0].split("%")[0] for i in infos]
     if not ips or any(not ipaddress.ip_address(ip).is_global for ip in ips):
+        log.warning("BLOCKED outbound request to %s: resolves to a non-public address", host)
         raise BlockedURL(f"Blocked non-public address for {host}")
     return ips[0]
 
@@ -75,6 +79,7 @@ class SafeHttp:
 
     def _request(self, method: str, url: str, **kw: Any) -> HttpResponse:
         headers = kw.pop("headers", None)
+        started, first_url = time.monotonic(), url
         with httpx.Client(follow_redirects=False, timeout=20, transport=self.transport) as client:
             for _ in range(4):
                 # per hop: a redirect to a host that may not receive the secret fails here instead of leaking it
@@ -84,7 +89,11 @@ class SafeHttp:
                     url = urljoin(url, r.headers["location"])
                     continue
                 text = r.text[:MAX_BYTES]
+                h = urlsplit(url)  # host and path only: query strings can carry tokens
+                log.info("%s %s%s -> %d (%.0fms, %d bytes)", method, h.hostname, h.path[:80], r.status_code,
+                         (time.monotonic() - started) * 1000, len(r.content))
                 return HttpResponse(r.status_code, self.resolver.redact(text) if self.resolver else text)
+        log.warning("too many redirects starting at %s", urlsplit(first_url).hostname)
         raise BlockedURL("Too many redirects")
 
     def get(self, url: str, params: dict | None = None, headers: dict | None = None) -> HttpResponse:

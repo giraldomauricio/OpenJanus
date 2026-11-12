@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import shutil
 import threading
 from datetime import datetime, timezone
@@ -21,6 +22,7 @@ from typing import Any, Callable, Literal
 from .lint import TOOL_NAME, lint_skill, lint_tool_source
 from .signing import Signer
 
+log = logging.getLogger("openjanus.ext")
 Kind = Literal["tool", "skill"]
 Status = Literal["pending", "approved", "rejected", "retired"]
 
@@ -107,6 +109,8 @@ class ExtensionManager:
             path = self._content("tool", name, "pending")
             path.write_text(source)
             self._write_meta("tool", name, "pending", description, rationale, lint.capabilities)
+            log.info("tool %s proposed (pending approval); capabilities=%s%s", name, lint.capabilities or "none",
+                     "; replaces the approved version" if replaces_approved else "")
             return {"status": "pending_approval", "kind": "tool", "name": name, "replaced_pending": replaced,
                     "replaces_approved": replaces_approved, "capabilities": lint.capabilities}
 
@@ -124,6 +128,7 @@ class ExtensionManager:
             path.write_text(SKILL_TEMPLATE.format(name=name, description=description,
                                                   tools=", ".join(tools), instructions=instructions.strip()))
             self._write_meta("skill", name, "pending", description, "", [])
+            log.info("skill %s proposed (pending approval)", name)
             known = self._reserved_tools() | {n for n, _ in self.approved_tool_files()} | {
                 i["name"] for i in self.list_items("pending") if i["kind"] == "tool"}
             unknown = [t for t in tools if t not in known]

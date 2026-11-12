@@ -22,10 +22,31 @@ class ToolCall:
 
 
 @dataclass
+class Usage:
+    """Token counts for one model call, in the same terms for every provider.
+
+    input_tokens counts the WHOLE prompt (cached part included). cache_read_tokens is how much of it came from the provider's prompt
+    cache, cache_write_tokens how much was written to it; None means this provider does not report that. Ollama is the case: it
+    reports the full prompt size on every call and does not say how much of it its own prefix cache reused (the second call of a tool
+    loop is visibly faster, but the counters cannot show why)."""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+
+    def __add__(self, o: "Usage") -> "Usage":
+        def add(a: int | None, b: int | None) -> int | None:
+            return None if a is None and b is None else (a or 0) + (b or 0)
+        return Usage(self.input_tokens + o.input_tokens, self.output_tokens + o.output_tokens,
+                     add(self.cache_read_tokens, o.cache_read_tokens), add(self.cache_write_tokens, o.cache_write_tokens))
+
+
+@dataclass
 class Turn:
     text: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     raw: Any = None
+    usage: Usage | None = None
 
 
 @dataclass

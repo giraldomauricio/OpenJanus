@@ -9,7 +9,7 @@ import httpx
 
 from .. import config
 from .. import images
-from .base import LLMProvider, ToolCall, ToolDef, Turn, collect
+from .base import LLMProvider, ToolCall, ToolDef, Turn, Usage, collect
 
 _THINK = re.compile(r"<think>.*?</think>", re.S)
 
@@ -111,6 +111,8 @@ class OllamaProvider(LLMProvider):
                     d = json.loads(line)
                     if d.get("error"):
                         raise RuntimeError(f"Ollama error: {d['error']}")
+                    if d.get("done"):  # the last line carries the counters
+                        turn.usage = Usage(d.get("prompt_eval_count") or 0, d.get("eval_count") or 0)
                     msg = d.get("message") or {}
                     if msg.get("content"):
                         raw_text += msg["content"]

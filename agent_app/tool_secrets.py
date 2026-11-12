@@ -16,11 +16,13 @@ echoes it back it is redacted from the response text.
 from __future__ import annotations
 
 import base64
+import logging
 import os
 import re
 from typing import Any
 from urllib.parse import urlsplit
 
+log = logging.getLogger("openjanus.security")
 NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,60}$")
 HOST_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")  # exact public hostname: no scheme, port, path, wildcard
 SECRET_PH = re.compile(r"\{secret:([A-Z][A-Z0-9_]{2,60})\}")
@@ -82,6 +84,8 @@ class SecretResolver:
                         raise SecretError(f"Secret {name} is only sent over https")
                     if (parts.hostname or "").lower() not in self.declared[name]:
                         raise SecretError(f"Secret {name} may only be sent to {', '.join(self.declared[name])}, not {parts.hostname}")
+                for name in sorted(placeholder_names(v)):
+                    log.info("secret %s sent to %s", name, parts.hostname)  # the name only, never the value
                 v = SECRET_PH.sub(lambda m: self._value(m.group(1)), v)
                 v = BASIC_PH.sub(lambda m: base64.b64encode(f"{m.group(1)}:{self._value(m.group(2))}".encode()).decode(), v)
             out[k] = v

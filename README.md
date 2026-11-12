@@ -80,6 +80,18 @@ new one by defining another variable block and an `<option>`.
 - Generated tools only get `ctx.db` and `ctx.http`. `ctx.http` blocks loopback/private addresses; the host is resolved once and the connection is pinned to the checked IP (TLS still verifies the hostname), so DNS rebinding cannot swap it.
 - The server binds to 127.0.0.1 and all state-changing requests need a per-process token embedded in the served page.
 
+## Logs, token usage and prompt caching
+- The server logs to the console **and** to `data/logs/openjanus.log` (rotating, 2 MB x 3), including uvicorn's own lines: each question
+  (provider, model, size), every model call (time, tokens, cache hits), every tool call (name, outcome, time), approvals, package
+  imports/exports, outbound HTTP (host and status only) and security events (bad tokens, blocked addresses, which secret *name* went
+  to which host). Your messages, answers, tool results and secret values are never logged; the text of an *error* is, and it can name a
+  table or column. `OPENJANUS_LOG_LEVEL=DEBUG` also logs tool arguments (truncated); `OPENJANUS_LOG_FILE=0` turns the file off.
+- Under each answer the chat shows the tokens used for that question (`11.4k in (11.4k from cache, 99%) · 49 out · 2 model calls`).
+- **Prompt caching** (`OPENJANUS_PROMPT_CACHE`, on by default): Claude requests carry a cache marker, so the tool list and system prompt
+  (about 11k tokens) and the earlier conversation are re-read at a fraction of the price on every step of a tool loop. Gemini caches
+  repeated prefixes on its own and Ollama reuses its prompt state; only Claude and Gemini report how much was served from cache.
+  Caches last about 5 minutes, and approving or retiring a tool or skill refreshes the tool list once.
+
 ## Known limits
 - No composite keys or min/max constraints yet. Model changes go through `alter_model` / `convert_column` (see *Schema changes*).
 - Tables are read-only to the agent until adopted. Tables whose columns are all TEXT (e.g. sqlite `.import`) stay string-typed
